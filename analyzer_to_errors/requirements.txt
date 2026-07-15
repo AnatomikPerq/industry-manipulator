@@ -1,0 +1,9 @@
+# оркестратор + агенты
+openai>=1.30.0
+pyyaml>=6.0
+jsonschema>=4.20.0
+open-interpreter
+
+# базовые скрипты-парсеры PDF (data/base_analysis_scripts)
+pdfplumber>=0.10.0     # netlist_to_json.py - таблицы соединений
+PyMuPDF>=1.23.0        # schematic_diagram_to_data.py - схемы EPLAN (импортируется как fitz)

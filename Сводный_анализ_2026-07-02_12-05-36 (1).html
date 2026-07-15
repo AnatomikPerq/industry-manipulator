@@ -1,0 +1,2101 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Сводный анализ</title>
+<script type="text/javascript" src="https://gc.kis.v2.scr.kaspersky-labs.com/FD126C42-EBFA-4E12-B309-BB3FDD723AC1/main.js?attr=ILxUOOgJI9HHbQ_YTZ8gmXbPQDjbFEtI8kdRbBC0ajK8uAoawGBjcLsb7mDwD6TG_6u1NVazA0FtSWqzBgPzBR7sCF169VcDbNiWwU4n1y5P3smJhbXFCEMxdY96AXxRXcvWJnVOaNVjztV0ne8OTb2uPibkY95zyTIrqtvUS6hErHgWv2aX8ujOugDJhZbZsC0XamN6b_C1cm0UeIqO_3ekTmyp5ePmRq21ITENNnbDqS2PSh1QE_KttBsOX8VKGDOpbq8Xudo3juUb-T_LoBO3HqJolD-wZ8RwjC2zvfj6QOC-dDsnuOyyAUFnhn3erqQgepEYBXNwLRNFl_55CWYxWSTaltYAlzFhIL3okRe54lp3CE7rj7vIP9btXgjMlf0Arrp4XKGxMHFMaEmuLLOwl4-fS3Gla8tRA1YhA9KwJLcNT9nds2ItlRXwS6iawCnZFkMIacDWITLYhnwdIfoxTYCx0EQW0lKSuQ9oq6jumfbdBI1I-H5IYandHXAnqYli6z9xMJcTu4OyP35dn36Uc4XUS_O0C_Q4SShndr3ZwCfVKQnv6GDFbAj7-3NxIOevHbxUDELtSG41xHy3vzSWISD-tO4aDfqa-yj_U5ur7acYUmxbgAt6yErjPPpiA5YNe05OkS1Tx9chsKkeP8E3Xq2LRv3xDe5lQTnkUAinFpkryG0Ezws40AsN6TGYbHMxXnSfbVVjw2YnONdgZsEvNE2KeBc8hNx8cnIdr189gp51mqS3DN_hdm0w4db7omh5gmtyP4A8MB4sv2dWfIwrTZIHnzhu6sh736aEKvC5sDxlgNfv3Fhe_roXRDrN6iwO1H8A-REt4yFRbAO3CW94itNeR6a6zPMh2Zisnf6Cd8sxB_dguTiHreANro8PoVsACU-MS2vRGvJ_K1uf7_sZcN8GDCWNN1ajPUiKZ3c_u-dIASa34CwF-Sip0cXgUR0V-6LHyBq5FaUHP8UZcr_eYoyKeRQnbeHg4N6PJ2cQeKPwui5ySF5UmvSF7Zhd_ZeFggECVaCZG9yzlhMRSISmrzndiTvTaD8tiVMC0c4z1MvBI0ONeCbtTGDBYpKvs4xLlgisMaQJnKDMsdOBQQ" charset="UTF-8"></script><style>
+:root {
+  --line: #cfd5dc;
+  --text: #202428;
+  --muted: #5b6570;
+  --paper: #ffffff;
+  --page: #f4f6f8;
+  --source: #e8f1fb;
+  --source-strong: #c9dff5;
+  --install: #e9f5ec;
+  --install-strong: #cfe7d5;
+  --remark: #fff2db;
+  --remark-strong: #f1d9ae;
+  --mismatch: #b42318;
+  --review: #9a6700;
+  --missing: #7a271a;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--text); font: 14px/1.4 Arial, sans-serif; }
+header { background: var(--paper); border-bottom: 1px solid var(--line); padding: 22px 28px 18px; }
+h1 { margin: 0 0 6px; font-size: 25px; font-weight: 650; }
+.subtitle { color: var(--muted); max-width: 1100px; }
+.summary { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+.summary-card { min-width: 145px; padding: 9px 12px; border: 1px solid var(--line); background: #fff; border-radius: 5px; }
+.summary-card span { display: block; color: var(--muted); font-size: 12px; }
+.summary-card strong { font-size: 21px; }
+nav { margin-top: 14px; display: flex; gap: 7px; flex-wrap: wrap; }
+nav a { color: #174ea6; text-decoration: none; border: 1px solid #b9cce5; background: #f6f9fd; border-radius: 4px; padding: 5px 8px; }
+nav a:hover { background: #eaf2fc; }
+main { padding: 18px 24px 32px; }
+.toolbar { position: sticky; top: 0; z-index: 10; display: flex; gap: 9px; align-items: center; flex-wrap: wrap; padding: 10px; border: 1px solid var(--line); background: rgba(255,255,255,.97); margin-bottom: 12px; }
+.toolbar input, .toolbar select, .toolbar button { min-height: 34px; border: 1px solid #aeb7c1; border-radius: 4px; background: #fff; padding: 6px 9px; color: var(--text); }
+.toolbar input { flex: 1 1 340px; min-width: 260px; }
+.toolbar button { cursor: pointer; background: #f7f8fa; }
+.toolbar button:hover { background: #edf0f3; }
+#visible-count { margin-left: auto; color: var(--muted); font-size: 12px; }
+.table-wrap { overflow: auto; border: 1px solid var(--line); background: #fff; max-height: calc(100vh - 240px); }
+table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 1960px; font-size: 12.5px; }
+th, td { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 7px 8px; vertical-align: top; }
+th:last-child, td:last-child { border-right: 0; }
+thead th { position: sticky; z-index: 5; text-align: left; font-weight: 650; }
+thead tr:first-child th { top: 0; height: 37px; text-align: center; border-bottom: 1px solid #aab3bd; }
+thead tr:nth-child(2) th { top: 37px; background: #eef1f4; white-space: nowrap; }
+.group-meta { background: #e9edf1; }
+.group-source { background: var(--source-strong); }
+.group-install { background: var(--install-strong); }
+.group-remark { background: var(--remark-strong); }
+.sub-source { background: var(--source) !important; }
+.sub-install { background: var(--install) !important; }
+.sub-remark { background: var(--remark) !important; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable::after { content: " ↕"; color: #7c8792; font-weight: normal; }
+th.sortable[data-direction="asc"]::after { content: " ▲"; color: #174ea6; }
+th.sortable[data-direction="desc"]::after { content: " ▼"; color: #174ea6; }
+tbody tr.issue-row:hover td { background-color: #f7fbff; }
+tbody tr.issue-row[data-kind="MISMATCH"] td:first-child { border-left: 5px solid var(--mismatch); }
+tbody tr.issue-row[data-kind="REVIEW"] td:first-child { border-left: 5px solid var(--review); }
+tbody tr.issue-row[data-kind="MISSING"] td:first-child { border-left: 5px solid var(--missing); }
+.report-separator td { background: #e9edf1; color: #28323c; font-weight: 650; padding: 9px 10px; border-top: 2px solid #8d99a5; }
+.report-separator small { color: var(--muted); font-weight: normal; margin-left: 8px; }
+.mono { font-family: Consolas, "Courier New", monospace; white-space: nowrap; }
+.pages { white-space: nowrap; }
+.action { min-width: 250px; }
+.findings { min-width: 230px; color: #34404b; }
+.empty-value { color: #8a949e; }
+.preview-button { border: 1px solid #8997a5; border-radius: 4px; background: #fff; padding: 4px; cursor: zoom-in; }
+.preview-button img { display: block; width: 128px; max-height: 86px; object-fit: contain; background: #f5f5f5; }
+.no-image { color: var(--muted); font-size: 11px; max-width: 130px; }
+.warning { margin: 14px 0; border: 1px solid #e3c98b; background: #fff8e8; padding: 10px 12px; }
+.no-issues { border: 1px solid #a9d4b4; background: #effaf2; padding: 18px; font-size: 16px; }
+footer { padding: 12px 24px 26px; color: var(--muted); font-size: 11px; }
+#image-modal { display: none; position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.82); align-items: center; justify-content: center; padding: 24px; }
+#image-modal.open { display: flex; }
+#image-modal img { max-width: 96vw; max-height: 92vh; background: #fff; box-shadow: 0 5px 30px rgba(0,0,0,.5); }
+#image-modal button { position: fixed; top: 15px; right: 20px; width: 42px; height: 42px; border: 0; border-radius: 21px; background: #fff; font-size: 24px; cursor: pointer; }
+@media print {
+  body { background: #fff; }
+  header, main { padding: 8px; }
+  .toolbar, nav, .preview-button { display: none !important; }
+  .table-wrap { max-height: none; overflow: visible; border: 0; }
+  table { min-width: 0; font-size: 9px; }
+  thead th { position: static; }
+  .no-image { font-size: 8px; }
+  @page { size: A3 landscape; margin: 8mm; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Сводный анализ</h1>
+</header>
+<main>
+  
+  <div class="toolbar">
+    <input id="search" type="search" placeholder="Поиск по документу, KKS, клеммнику, маркировке или тексту замечания">
+    <select id="report-filter"><option value="ALL">Все комплекты документов</option><option value="1">ИК.3912-АТХ3.108_30.06.2026.pdf</option><option value="2">ИК.3912-АТХ3.115_30.06.2026.pdf</option><option value="3">ИК.3912-АТХ3.116_30.06.2026.pdf</option></select>
+    <select id="kind-filter">
+      <option value="ALL">Все виды замечаний</option>
+      <option value="MISMATCH">Несоответствие документов</option>
+      <option value="REVIEW">Требуется уточнение</option>
+      <option value="MISSING">Не найдено в монтаже</option>
+    </select>
+    <button id="reset" type="button">Сбросить</button>
+    <button type="button" onclick="window.print()">Печать / PDF</button>
+    <span id="visible-count">Показано: 98 из 98</span>
+  </div>
+  <div class="table-wrap">
+    <table id="issues-table">
+      <thead>
+        <tr>
+          <th rowspan="2" class="group-meta sortable" data-type="number">№</th>
+          <th rowspan="2" class="group-meta sortable" data-type="text">Комплект документов</th>
+          <th colspan="6" class="group-source">Таблица подключений</th>
+          <th colspan="6" class="group-install">Монтажная документация</th>
+          <th colspan="2" class="group-remark">Вывод</th>
+        </tr>
+        <tr>
+          <th class="sub-source sortable" data-type="number">Лист / строка</th>
+          <th class="sub-source sortable" data-type="text">Шкаф</th>
+          <th class="sub-source sortable" data-type="text">Клеммник / штифт</th>
+          <th class="sub-source sortable" data-type="text">Маркировка</th>
+          <th class="sub-source sortable" data-type="text">KKS</th>
+          <th class="sub-source sortable" data-type="text">Проводник / сигнал</th>
+          <th class="sub-install sortable" data-type="number">Где смотреть</th>
+          <th class="sub-install sortable" data-type="text">Клеммник / штифт</th>
+          <th class="sub-install sortable" data-type="text">Маркировка</th>
+          <th class="sub-install sortable" data-type="text">KKS</th>
+          <th class="sub-install sortable" data-type="text">Проводник / сигнал</th>
+          <th class="sub-install sortable" data-type="text">Что найдено на схеме</th>
+          <th class="sub-remark sortable" data-type="text">Что требуется уточнить или исправить</th>
+          <th class="sub-remark">Фрагмент монтажной схемы</th>
+        </tr>
+      </thead>
+      
+      <tbody data-report-group="1">
+        <tr class="report-separator" id="report-1"><td colspan="16">ИК.3912-АТХ3.108_30.06.2026.pdf <small>4 замечаний · папка: ИК.3912-АТХ3.108_30.06.2026_отчет_2026-07-02_11-58-18</small></td></tr>
+        
+        <tr class="issue-row" data-report="1" data-kind="REVIEW">
+          <td data-sort="1">1</td>
+          <td data-sort="ИК.3912-АТХ3.108_30.06.2026.pdf ИК.3912-АТХ3.108_30.06.2026_отчет_2026-07-02_11-58-18"><strong>ИК.3912-АТХ3.108_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.108_30.06.2026_отчет_2026-07-02_11-58-18</span></td>
+          <td data-sort="5">лист 5, строка 16</td>
+          <td data-sort="00CJF01"><span class="mono">00CJF01</span></td>
+          <td data-sort="U1 2"><strong class="mono">U1 / 2</strong><br><span class="empty-value">тип: НПСИ-ТС-0-24-М0</span></td>
+          <td data-sort="47"><span class="mono">47</span></td>
+          <td data-sort="00BUX59CT001"><span class="mono">00BUX59CT001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="10">лист 10</td>
+          <td data-sort="U1 2"><strong class="mono">U1 / 2</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BUX59CT001"><span class="mono">00BUX59CT001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 10: U1/2; провод не распознан; KKS 00BUX59CT001">стр. 10: U1/2; провод не распознан; KKS 00BUX59CT001</td>
+          <td class="action" data-sort="Не найдена маркировка провода 47">Не найдена маркировка провода 47</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0001_ebb9e03e7b34.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="1" data-kind="REVIEW">
+          <td data-sort="2">2</td>
+          <td data-sort="ИК.3912-АТХ3.108_30.06.2026.pdf ИК.3912-АТХ3.108_30.06.2026_отчет_2026-07-02_11-58-18"><strong>ИК.3912-АТХ3.108_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.108_30.06.2026_отчет_2026-07-02_11-58-18</span></td>
+          <td data-sort="5">лист 5, строка 17</td>
+          <td data-sort="00CJF01"><span class="mono">00CJF01</span></td>
+          <td data-sort="U1 3"><strong class="mono">U1 / 3</strong><br><span class="empty-value">тип: НПСИ-ТС-0-24-М0</span></td>
+          <td data-sort="48"><span class="mono">48</span></td>
+          <td data-sort="00BUX59CT001"><span class="mono">00BUX59CT001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="10">лист 10</td>
+          <td data-sort="U1 3"><strong class="mono">U1 / 3</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BUX59CT001"><span class="mono">00BUX59CT001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 10: U1/3; провод не распознан; KKS 00BUX59CT001">стр. 10: U1/3; провод не распознан; KKS 00BUX59CT001</td>
+          <td class="action" data-sort="Не найдена маркировка провода 48">Не найдена маркировка провода 48</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0002_4e853a2809be.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="1" data-kind="REVIEW">
+          <td data-sort="3">3</td>
+          <td data-sort="ИК.3912-АТХ3.108_30.06.2026.pdf ИК.3912-АТХ3.108_30.06.2026_отчет_2026-07-02_11-58-18"><strong>ИК.3912-АТХ3.108_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.108_30.06.2026_отчет_2026-07-02_11-58-18</span></td>
+          <td data-sort="7">лист 7, строка 12</td>
+          <td data-sort="00CJF01"><span class="mono">00CJF01</span></td>
+          <td data-sort="XA012 PE"><strong class="mono">XA012 / PE</strong><br><span class="empty-value">тип: Шина заземления</span></td>
+          <td data-sort="PE"><span class="mono">PE</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="PE"><span class="mono">PE</span></td>
+          <td class="pages" data-sort="1">лист 1</td>
+          <td data-sort=" "><strong class="mono">—</strong></td>
+          <td data-sort="PE"><span class="mono">PE</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="">Данные на схеме не определены однозначно.</td>
+          <td class="action" data-sort="PE-шина показана глобально, но обозначение конкретного клеммника не найдено; требуется визуальное подтверждение">PE-шина показана глобально, но обозначение конкретного клеммника не найдено; требуется визуальное подтверждение</td>
+          <td><div class="no-image">Фрагмент не сформирован.</div></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="1" data-kind="REVIEW">
+          <td data-sort="4">4</td>
+          <td data-sort="ИК.3912-АТХ3.108_30.06.2026.pdf ИК.3912-АТХ3.108_30.06.2026_отчет_2026-07-02_11-58-18"><strong>ИК.3912-АТХ3.108_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.108_30.06.2026_отчет_2026-07-02_11-58-18</span></td>
+          <td data-sort="19">лист 19, строка 16</td>
+          <td data-sort="00CJF01"><span class="mono">00CJF01</span></td>
+          <td data-sort="XPB 1"><strong class="mono">XPB / 1</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00HHA14CJ001"><span class="mono">00HHA14CJ001</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="53">лист 53</td>
+          <td data-sort="XPB 1"><strong class="mono">XPB / 1</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00HHA14CJ001"><span class="mono">00HHA14CJ001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 53: XPB/1; провод не требуется; KKS 00HHA14CJ001">стр. 53: XPB/1; провод не требуется; KKS 00HHA14CJ001</td>
+          <td class="action" data-sort="В таблице повторяется клемма XPB/1 с различными данными (стр. 4/1, стр. 19/16)">В таблице повторяется клемма XPB/1 с различными данными (стр. 4/1, стр. 19/16)</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0003_da804567d004.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+      </tbody>
+      
+      <tbody data-report-group="2">
+        <tr class="report-separator" id="report-2"><td colspan="16">ИК.3912-АТХ3.115_30.06.2026.pdf <small>26 замечаний · папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</small></td></tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="5">5</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 1</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 1"><strong class="mono">XPA / 1</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="515"><span class="mono">515</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 1"><strong class="mono">XPA / 1</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/1; провод не распознан">стр. 6: XPA/1; провод не распознан</td>
+          <td class="action" data-sort="Не найдена маркировка провода 515 Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Не найдена маркировка провода 515 Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0004_3f6d08c22cf5.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="6">6</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 4</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 14"><strong class="mono">XPA / 14</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 14"><strong class="mono">XPA / 14</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/14; провод не требуется">стр. 6: XPA/14; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0005_c3d8309d669e.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="7">7</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 10</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 6"><strong class="mono">XPA / 6</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 6"><strong class="mono">XPA / 6</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/6; провод не требуется">стр. 6: XPA/6; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0006_95f2e387ea3f.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="8">8</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 11</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 17"><strong class="mono">XPA / 17</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 17"><strong class="mono">XPA / 17</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/17; провод не требуется">стр. 7: XPA/17; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0007_6f870492db58.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="9">9</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 13</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 7"><strong class="mono">XPA / 7</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 7"><strong class="mono">XPA / 7</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/7; провод не требуется">стр. 6: XPA/7; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0008_52b2d34a12c9.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="10">10</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 14</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 8"><strong class="mono">XPA / 8</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 8"><strong class="mono">XPA / 8</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/8; провод не требуется">стр. 6: XPA/8; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0009_8907c809370c.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="11">11</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 15</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 19"><strong class="mono">XPA / 19</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 19"><strong class="mono">XPA / 19</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/19; провод не требуется">стр. 7: XPA/19; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0010_ad7a0fd92f20.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="12">12</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 16</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 20"><strong class="mono">XPA / 20</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 20"><strong class="mono">XPA / 20</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/20; провод не требуется">стр. 7: XPA/20; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0011_7511823e99cc.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="13">13</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 17</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 9"><strong class="mono">XPA / 9</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 9"><strong class="mono">XPA / 9</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/9; провод не требуется">стр. 6: XPA/9; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0012_01d95ef67cbe.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="14">14</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 18</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 10"><strong class="mono">XPA / 10</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 10"><strong class="mono">XPA / 10</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/10; провод не требуется">стр. 6: XPA/10; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0013_e4eeed670463.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="15">15</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 19</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 21"><strong class="mono">XPA / 21</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 21"><strong class="mono">XPA / 21</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/21; провод не требуется">стр. 7: XPA/21; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0014_ab2f79ce7ab3.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="16">16</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 20</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 22"><strong class="mono">XPA / 22</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 22"><strong class="mono">XPA / 22</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/22; провод не требуется">стр. 7: XPA/22; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0015_1d59f477e01a.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="17">17</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 21</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 11"><strong class="mono">XPA / 11</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 11"><strong class="mono">XPA / 11</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/11; провод не требуется">стр. 6: XPA/11; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0016_e5c60f457bf7.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="18">18</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 24</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 24"><strong class="mono">XPA / 24</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 24"><strong class="mono">XPA / 24</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/24; провод не требуется">стр. 7: XPA/24; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0017_382f1c5af0aa.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="19">19</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 25</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 25"><strong class="mono">XPA / 25</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 25"><strong class="mono">XPA / 25</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/25; провод не требуется">стр. 7: XPA/25; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0018_d113ebb67596.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="20">20</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 26</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 26"><strong class="mono">XPA / 26</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 26"><strong class="mono">XPA / 26</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/26; провод не требуется">стр. 7: XPA/26; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0019_880b6b7002fe.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="21">21</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 27</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 27"><strong class="mono">XPA / 27</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 27"><strong class="mono">XPA / 27</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/27; провод не требуется">стр. 7: XPA/27; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0020_4a3cdab863e9.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="22">22</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 29</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 29"><strong class="mono">XPA / 29</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 29"><strong class="mono">XPA / 29</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/29; провод не требуется">стр. 7: XPA/29; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0021_d6a4b62a764a.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="23">23</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 30</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 30"><strong class="mono">XPA / 30</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 30"><strong class="mono">XPA / 30</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/30; провод не требуется">стр. 7: XPA/30; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0022_f369ec43460a.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="24">24</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 31</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 31"><strong class="mono">XPA / 31</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 31"><strong class="mono">XPA / 31</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/31; провод не требуется">стр. 7: XPA/31; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0023_d84a515fa369.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="REVIEW">
+          <td data-sort="25">25</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="3">лист 3, строка 32</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="XPA 32"><strong class="mono">XPA / 32</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 32"><strong class="mono">XPA / 32</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/32; провод не требуется">стр. 7: XPA/32; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0024_096c450107f6.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="MISMATCH">
+          <td data-sort="26">26</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="20">лист 20, строка 11</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="RB03 16"><strong class="mono">RB03 / 16</strong><br><span class="empty-value">тип: UM-DBC16M</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00USE23CL002XQ01"><span class="mono">00USE23CL002XQ01</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="8">лист 8</td>
+          <td data-sort="RB03 16"><strong class="mono">RB03 / 16</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 8: RB03/16; провод не требуется">стр. 8: RB03/16; провод не требуется</td>
+          <td class="action" data-sort="KKS 00USE23CL002XQ01 не найден на монтажной странице">KKS 00USE23CL002XQ01 не найден на монтажной странице</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0025_d9bfe0796d6d.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="MISMATCH">
+          <td data-sort="27">27</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="20">лист 20, строка 13</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="RB04 1"><strong class="mono">RB04 / 1</strong><br><span class="empty-value">тип: UM-DBC16M</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00USE23CL003XQ01"><span class="mono">00USE23CL003XQ01</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="9">лист 9</td>
+          <td data-sort="RB04 1"><strong class="mono">RB04 / 1</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 9: RB04/1; провод не требуется">стр. 9: RB04/1; провод не требуется</td>
+          <td class="action" data-sort="KKS 00USE23CL003XQ01 не найден на монтажной странице">KKS 00USE23CL003XQ01 не найден на монтажной странице</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0026_737e02d49a62.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="MISMATCH">
+          <td data-sort="28">28</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="20">лист 20, строка 15</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="RB04 2"><strong class="mono">RB04 / 2</strong><br><span class="empty-value">тип: UM-DBC16M</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00USE23CL004XQ01"><span class="mono">00USE23CL004XQ01</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="9">лист 9</td>
+          <td data-sort="RB04 2"><strong class="mono">RB04 / 2</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 9: RB04/2; провод не требуется">стр. 9: RB04/2; провод не требуется</td>
+          <td class="action" data-sort="KKS 00USE23CL004XQ01 не найден на монтажной странице">KKS 00USE23CL004XQ01 не найден на монтажной странице</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0027_88a89b049270.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="MISMATCH">
+          <td data-sort="29">29</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="20">лист 20, строка 17</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="RB04 3"><strong class="mono">RB04 / 3</strong><br><span class="empty-value">тип: UM-DBC16M</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00USE23CP002XQ01"><span class="mono">00USE23CP002XQ01</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="9">лист 9</td>
+          <td data-sort="RB04 3"><strong class="mono">RB04 / 3</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 9: RB04/3; провод не требуется">стр. 9: RB04/3; провод не требуется</td>
+          <td class="action" data-sort="KKS 00USE23CP002XQ01 не найден на монтажной странице">KKS 00USE23CP002XQ01 не найден на монтажной странице</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0028_190c169d93f4.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="2" data-kind="MISMATCH">
+          <td data-sort="30">30</td>
+          <td data-sort="ИК.3912-АТХ3.115_30.06.2026.pdf ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53"><strong>ИК.3912-АТХ3.115_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.115_30.06.2026_отчет_2026-07-02_11-59-53</span></td>
+          <td data-sort="20">лист 20, строка 19</td>
+          <td data-sort="00CJF02"><span class="mono">00CJF02</span></td>
+          <td data-sort="RB04 4"><strong class="mono">RB04 / 4</strong><br><span class="empty-value">тип: UM-DBC16M</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00USE23CP031XQ01"><span class="mono">00USE23CP031XQ01</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="9">лист 9</td>
+          <td data-sort="RB04 4"><strong class="mono">RB04 / 4</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 9: RB04/4; провод не требуется">стр. 9: RB04/4; провод не требуется</td>
+          <td class="action" data-sort="KKS 00USE23CP031XQ01 не найден на монтажной странице">KKS 00USE23CP031XQ01 не найден на монтажной странице</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0029_ec3890d28917.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+      </tbody>
+      
+      <tbody data-report-group="3">
+        <tr class="report-separator" id="report-3"><td colspan="16">ИК.3912-АТХ3.116_30.06.2026.pdf <small>68 замечаний · папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</small></td></tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="31">31</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="3">лист 3, строка 1</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XPA 1"><strong class="mono">XPA / 1</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 1"><strong class="mono">XPA / 1</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/1; провод не требуется">стр. 6: XPA/1; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0030_16673a6a8c95.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="32">32</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="3">лист 3, строка 6</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XPA 6"><strong class="mono">XPA / 6</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 6"><strong class="mono">XPA / 6</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/6; провод не требуется">стр. 6: XPA/6; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0031_8e197f29bbdc.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="33">33</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="3">лист 3, строка 7</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XPA 7"><strong class="mono">XPA / 7</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 7"><strong class="mono">XPA / 7</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/7; провод не требуется">стр. 6: XPA/7; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0032_76f6706eabce.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="34">34</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="3">лист 3, строка 8</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XPA 8"><strong class="mono">XPA / 8</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 8"><strong class="mono">XPA / 8</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/8; провод не требуется">стр. 6: XPA/8; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0033_4a5c9fc99079.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="35">35</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="3">лист 3, строка 9</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XPA 9"><strong class="mono">XPA / 9</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 9"><strong class="mono">XPA / 9</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/9; провод не требуется">стр. 6: XPA/9; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0034_17b098023fa5.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="36">36</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="3">лист 3, строка 12</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XPA 12"><strong class="mono">XPA / 12</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 12"><strong class="mono">XPA / 12</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/12; провод не требуется">стр. 6: XPA/12; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0035_2b6aff7441a6.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="37">37</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="3">лист 3, строка 13</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XPA 13"><strong class="mono">XPA / 13</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 13"><strong class="mono">XPA / 13</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/13; провод не требуется">стр. 6: XPA/13; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0036_e144afede78d.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="38">38</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="3">лист 3, строка 14</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XPA 14"><strong class="mono">XPA / 14</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="6">лист 6</td>
+          <td data-sort="XPA 14"><strong class="mono">XPA / 14</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 6: XPA/14; провод не требуется">стр. 6: XPA/14; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0037_8202593e13ff.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="39">39</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="3">лист 3, строка 17</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XPA 17"><strong class="mono">XPA / 17</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 17"><strong class="mono">XPA / 17</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/17; провод не требуется">стр. 7: XPA/17; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0038_4a2434156eae.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="40">40</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="3">лист 3, строка 18</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XPA 18"><strong class="mono">XPA / 18</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 18"><strong class="mono">XPA / 18</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/18; провод не требуется">стр. 7: XPA/18; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0039_d7d64422f00d.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="41">41</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="3">лист 3, строка 19</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XPA 19"><strong class="mono">XPA / 19</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 19"><strong class="mono">XPA / 19</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/19; провод не требуется">стр. 7: XPA/19; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0040_54a1818c1c25.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="42">42</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="3">лист 3, строка 20</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XPA 20"><strong class="mono">XPA / 20</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="XPA 20"><strong class="mono">XPA / 20</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: XPA/20; провод не требуется">стр. 7: XPA/20; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0041_7d06a38140d1.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="43">43</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="7">лист 7, строка 12</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XA22 3"><strong class="mono">XA22 / 3</strong><br><span class="empty-value">тип: Шина заземления</span></td>
+          <td data-sort="PE"><span class="mono">PE</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="PE"><span class="mono">PE</span></td>
+          <td class="pages" data-sort="1">лист 1</td>
+          <td data-sort=" "><strong class="mono">—</strong></td>
+          <td data-sort="PE"><span class="mono">PE</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="">Данные на схеме не определены однозначно.</td>
+          <td class="action" data-sort="PE-шина показана глобально, но обозначение конкретного клеммника не найдено; требуется визуальное подтверждение">PE-шина показана глобально, но обозначение конкретного клеммника не найдено; требуется визуальное подтверждение</td>
+          <td><div class="no-image">Фрагмент не сформирован.</div></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="44">44</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="22">лист 22, строка 9</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="RB06 15"><strong class="mono">RB06 / 15</strong><br><span class="empty-value">тип: UM-DBC16M</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="L+"><span class="mono">L+</span></td>
+          <td class="pages" data-sort="9">лист 9</td>
+          <td data-sort="RB06 15"><strong class="mono">RB06 / 15</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 9: RB06/15; провод не требуется">стр. 9: RB06/15; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0042_9c306fe87138.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="45">45</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 1</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 1"><strong class="mono">XT3 / 1</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="726"><span class="mono">726</span></td>
+          <td data-sort="00SAV00AA001"><span class="mono">00SAV00AA001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="53">лист 53</td>
+          <td data-sort="RB04 2"><strong class="mono">RB04 / 2</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV00AA001"><span class="mono">00SAV00AA001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 53: фактически RB04/2; KKS 00SAV00AA001">стр. 53: фактически RB04/2; KKS 00SAV00AA001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/1, на монтажной схеме RB04/2">Клемма не совпадает: в таблице XT3/1, на монтажной схеме RB04/2</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0043_6f5503cb4712.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="46">46</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 2</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 2"><strong class="mono">XT3 / 2</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="727"><span class="mono">727</span></td>
+          <td data-sort="00SAV00AA001"><span class="mono">00SAV00AA001</span></td>
+          <td data-sort="C_OPEN"><span class="mono">C_OPEN</span></td>
+          <td class="pages" data-sort="53">лист 53</td>
+          <td data-sort="RB04 2"><strong class="mono">RB04 / 2</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV00AA001"><span class="mono">00SAV00AA001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 53: фактически RB04/2; KKS 00SAV00AA001">стр. 53: фактически RB04/2; KKS 00SAV00AA001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/2, на монтажной схеме RB04/2">Клемма не совпадает: в таблице XT3/2, на монтажной схеме RB04/2</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0043_6f5503cb4712.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="47">47</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 3</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 3"><strong class="mono">XT3 / 3</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="728"><span class="mono">728</span></td>
+          <td data-sort="00SAV10AN001"><span class="mono">00SAV10AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="54">лист 54</td>
+          <td data-sort="RB04 3"><strong class="mono">RB04 / 3</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV10AN001"><span class="mono">00SAV10AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 54: фактически RB04/3; KKS 00SAV10AN001">стр. 54: фактически RB04/3; KKS 00SAV10AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/3, на монтажной схеме RB04/3">Клемма не совпадает: в таблице XT3/3, на монтажной схеме RB04/3</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0044_c61e9dfb53d4.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="48">48</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 4</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 4"><strong class="mono">XT3 / 4</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="729"><span class="mono">729</span></td>
+          <td data-sort="00SAV10AN001"><span class="mono">00SAV10AN001</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="54">лист 54</td>
+          <td data-sort="RB04 3"><strong class="mono">RB04 / 3</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV10AN001"><span class="mono">00SAV10AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 54: фактически RB04/3; KKS 00SAV10AN001">стр. 54: фактически RB04/3; KKS 00SAV10AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/4, на монтажной схеме RB04/3">Клемма не совпадает: в таблице XT3/4, на монтажной схеме RB04/3</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0044_c61e9dfb53d4.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="49">49</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 5</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 5"><strong class="mono">XT3 / 5</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="730"><span class="mono">730</span></td>
+          <td data-sort="00SAV20AN001"><span class="mono">00SAV20AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="54">лист 54</td>
+          <td data-sort="RB04 4"><strong class="mono">RB04 / 4</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV20AN001"><span class="mono">00SAV20AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 54: фактически RB04/4; KKS 00SAV20AN001">стр. 54: фактически RB04/4; KKS 00SAV20AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/5, на монтажной схеме RB04/4">Клемма не совпадает: в таблице XT3/5, на монтажной схеме RB04/4</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0045_837199fcc4d1.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="50">50</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 6</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 6"><strong class="mono">XT3 / 6</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="731"><span class="mono">731</span></td>
+          <td data-sort="00SAV20AN001"><span class="mono">00SAV20AN001</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="54">лист 54</td>
+          <td data-sort="RB04 4"><strong class="mono">RB04 / 4</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV20AN001"><span class="mono">00SAV20AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 54: фактически RB04/4; KKS 00SAV20AN001">стр. 54: фактически RB04/4; KKS 00SAV20AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/6, на монтажной схеме RB04/4">Клемма не совпадает: в таблице XT3/6, на монтажной схеме RB04/4</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0045_837199fcc4d1.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="51">51</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 7</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 7"><strong class="mono">XT3 / 7</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="732"><span class="mono">732</span></td>
+          <td data-sort="00SAV30AN001"><span class="mono">00SAV30AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="57">лист 57</td>
+          <td data-sort="RB05 3"><strong class="mono">RB05 / 3</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV30AN001"><span class="mono">00SAV30AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 57: фактически RB05/3; KKS 00SAV30AN001">стр. 57: фактически RB05/3; KKS 00SAV30AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/7, на монтажной схеме RB05/3">Клемма не совпадает: в таблице XT3/7, на монтажной схеме RB05/3</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0046_3644cacfc5b1.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="52">52</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 8</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 8"><strong class="mono">XT3 / 8</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="733"><span class="mono">733</span></td>
+          <td data-sort="00SAV30AN001"><span class="mono">00SAV30AN001</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="57">лист 57</td>
+          <td data-sort="RB05 3"><strong class="mono">RB05 / 3</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV30AN001"><span class="mono">00SAV30AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 57: фактически RB05/3; KKS 00SAV30AN001">стр. 57: фактически RB05/3; KKS 00SAV30AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/8, на монтажной схеме RB05/3">Клемма не совпадает: в таблице XT3/8, на монтажной схеме RB05/3</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0046_3644cacfc5b1.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="53">53</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 9</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 9"><strong class="mono">XT3 / 9</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="738"><span class="mono">738</span></td>
+          <td data-sort="00SAV40AN001"><span class="mono">00SAV40AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="57">лист 57</td>
+          <td data-sort="RB05 4"><strong class="mono">RB05 / 4</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV40AN001"><span class="mono">00SAV40AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 57: фактически RB05/4; KKS 00SAV40AN001">стр. 57: фактически RB05/4; KKS 00SAV40AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/9, на монтажной схеме RB05/4">Клемма не совпадает: в таблице XT3/9, на монтажной схеме RB05/4</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0047_12e377d24575.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="54">54</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 10</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 10"><strong class="mono">XT3 / 10</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="739"><span class="mono">739</span></td>
+          <td data-sort="00SAV40AN001"><span class="mono">00SAV40AN001</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="57">лист 57</td>
+          <td data-sort="RB05 4"><strong class="mono">RB05 / 4</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV40AN001"><span class="mono">00SAV40AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 57: фактически RB05/4; KKS 00SAV40AN001">стр. 57: фактически RB05/4; KKS 00SAV40AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/10, на монтажной схеме RB05/4">Клемма не совпадает: в таблице XT3/10, на монтажной схеме RB05/4</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0047_12e377d24575.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="55">55</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 11</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 11"><strong class="mono">XT3 / 11</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="740"><span class="mono">740</span></td>
+          <td data-sort="00SAV51AN001"><span class="mono">00SAV51AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="58">лист 58</td>
+          <td data-sort="RB05 5"><strong class="mono">RB05 / 5</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV51AN001"><span class="mono">00SAV51AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 58: фактически RB05/5; KKS 00SAV51AN001">стр. 58: фактически RB05/5; KKS 00SAV51AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/11, на монтажной схеме RB05/5">Клемма не совпадает: в таблице XT3/11, на монтажной схеме RB05/5</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0048_5ebfc229cf2e.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="56">56</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 12</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 12"><strong class="mono">XT3 / 12</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="741"><span class="mono">741</span></td>
+          <td data-sort="00SAV51AN001"><span class="mono">00SAV51AN001</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="58">лист 58</td>
+          <td data-sort="RB05 5"><strong class="mono">RB05 / 5</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV51AN001"><span class="mono">00SAV51AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 58: фактически RB05/5; KKS 00SAV51AN001">стр. 58: фактически RB05/5; KKS 00SAV51AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/12, на монтажной схеме RB05/5">Клемма не совпадает: в таблице XT3/12, на монтажной схеме RB05/5</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0048_5ebfc229cf2e.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="57">57</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 13</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 13"><strong class="mono">XT3 / 13</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="742"><span class="mono">742</span></td>
+          <td data-sort="00SAV52AN001"><span class="mono">00SAV52AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="61">лист 61</td>
+          <td data-sort="RB06 4"><strong class="mono">RB06 / 4</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV52AN001"><span class="mono">00SAV52AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 61: фактически RB06/4; KKS 00SAV52AN001">стр. 61: фактически RB06/4; KKS 00SAV52AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/13, на монтажной схеме RB06/4">Клемма не совпадает: в таблице XT3/13, на монтажной схеме RB06/4</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0049_bc57167039c4.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="58">58</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 14</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 14"><strong class="mono">XT3 / 14</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="743"><span class="mono">743</span></td>
+          <td data-sort="00SAV52AN001"><span class="mono">00SAV52AN001</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="61">лист 61</td>
+          <td data-sort="RB06 4"><strong class="mono">RB06 / 4</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV52AN001"><span class="mono">00SAV52AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 61: фактически RB06/4; KKS 00SAV52AN001">стр. 61: фактически RB06/4; KKS 00SAV52AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/14, на монтажной схеме RB06/4">Клемма не совпадает: в таблице XT3/14, на монтажной схеме RB06/4</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0049_bc57167039c4.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="59">59</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 15</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 15"><strong class="mono">XT3 / 15</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="744"><span class="mono">744</span></td>
+          <td data-sort="00SAV61AN001"><span class="mono">00SAV61AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="62">лист 62</td>
+          <td data-sort="RB06 6"><strong class="mono">RB06 / 6</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV61AN001"><span class="mono">00SAV61AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 62: фактически RB06/6; KKS 00SAV61AN001">стр. 62: фактически RB06/6; KKS 00SAV61AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/15, на монтажной схеме RB06/6">Клемма не совпадает: в таблице XT3/15, на монтажной схеме RB06/6</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0050_a9162fddad30.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="60">60</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 16</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 16"><strong class="mono">XT3 / 16</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="745"><span class="mono">745</span></td>
+          <td data-sort="00SAV61AN001"><span class="mono">00SAV61AN001</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="62">лист 62</td>
+          <td data-sort="RB06 6"><strong class="mono">RB06 / 6</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV61AN001"><span class="mono">00SAV61AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 62: фактически RB06/6; KKS 00SAV61AN001">стр. 62: фактически RB06/6; KKS 00SAV61AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/16, на монтажной схеме RB06/6">Клемма не совпадает: в таблице XT3/16, на монтажной схеме RB06/6</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0050_a9162fddad30.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="61">61</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 17</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 17"><strong class="mono">XT3 / 17</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="746"><span class="mono">746</span></td>
+          <td data-sort="00SAV62AN001"><span class="mono">00SAV62AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="62">лист 62</td>
+          <td data-sort="RB06 7"><strong class="mono">RB06 / 7</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV62AN001"><span class="mono">00SAV62AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 62: фактически RB06/7; KKS 00SAV62AN001">стр. 62: фактически RB06/7; KKS 00SAV62AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/17, на монтажной схеме RB06/7">Клемма не совпадает: в таблице XT3/17, на монтажной схеме RB06/7</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0051_078c9038e1df.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="62">62</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 18</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 18"><strong class="mono">XT3 / 18</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="747"><span class="mono">747</span></td>
+          <td data-sort="00SAV62AN001"><span class="mono">00SAV62AN001</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="62">лист 62</td>
+          <td data-sort="RB06 7"><strong class="mono">RB06 / 7</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV62AN001"><span class="mono">00SAV62AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 62: фактически RB06/7; KKS 00SAV62AN001">стр. 62: фактически RB06/7; KKS 00SAV62AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/18, на монтажной схеме RB06/7">Клемма не совпадает: в таблице XT3/18, на монтажной схеме RB06/7</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0051_078c9038e1df.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="63">63</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 19</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 19"><strong class="mono">XT3 / 19</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="748"><span class="mono">748</span></td>
+          <td data-sort="00SAV70AN001"><span class="mono">00SAV70AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="64">лист 64</td>
+          <td data-sort="RB07 1"><strong class="mono">RB07 / 1</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV70AN001"><span class="mono">00SAV70AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 64: фактически RB07/1; KKS 00SAV70AN001">стр. 64: фактически RB07/1; KKS 00SAV70AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/19, на монтажной схеме RB07/1">Клемма не совпадает: в таблице XT3/19, на монтажной схеме RB07/1</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0052_cfef251525fb.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="64">64</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 20</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 20"><strong class="mono">XT3 / 20</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="749"><span class="mono">749</span></td>
+          <td data-sort="00SAV70AN001"><span class="mono">00SAV70AN001</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="64">лист 64</td>
+          <td data-sort="RB07 1"><strong class="mono">RB07 / 1</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV70AN001"><span class="mono">00SAV70AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 64: фактически RB07/1; KKS 00SAV70AN001">стр. 64: фактически RB07/1; KKS 00SAV70AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/20, на монтажной схеме RB07/1">Клемма не совпадает: в таблице XT3/20, на монтажной схеме RB07/1</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0052_cfef251525fb.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="65">65</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 21</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 21"><strong class="mono">XT3 / 21</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="750"><span class="mono">750</span></td>
+          <td data-sort="00SAV80AN001"><span class="mono">00SAV80AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="64">лист 64</td>
+          <td data-sort="RB07 2"><strong class="mono">RB07 / 2</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV80AN001"><span class="mono">00SAV80AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 64: фактически RB07/2; KKS 00SAV80AN001">стр. 64: фактически RB07/2; KKS 00SAV80AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/21, на монтажной схеме RB07/2">Клемма не совпадает: в таблице XT3/21, на монтажной схеме RB07/2</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0053_6d6699f4c9a3.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="66">66</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 22</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 22"><strong class="mono">XT3 / 22</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="751"><span class="mono">751</span></td>
+          <td data-sort="00SAV80AN001"><span class="mono">00SAV80AN001</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="64">лист 64</td>
+          <td data-sort="RB07 2"><strong class="mono">RB07 / 2</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00SAV80AN001"><span class="mono">00SAV80AN001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 64: фактически RB07/2; KKS 00SAV80AN001">стр. 64: фактически RB07/2; KKS 00SAV80AN001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/22, на монтажной схеме RB07/2">Клемма не совпадает: в таблице XT3/22, на монтажной схеме RB07/2</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0053_6d6699f4c9a3.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISSING">
+          <td data-sort="67">67</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 23</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 23"><strong class="mono">XT3 / 23</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="752"><span class="mono">752</span></td>
+          <td data-sort="00UHG00GP001"><span class="mono">00UHG00GP001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="999999">Не определено</td>
+          <td data-sort=" "><strong class="mono">—</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="">Данные на схеме не определены однозначно.</td>
+          <td class="action" data-sort="В монтажной документации не найдено сочетание клеммника и штифта">В монтажной документации не найдено сочетание клеммника и штифта</td>
+          <td><div class="no-image">Фрагмент не сформирован.</div></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISSING">
+          <td data-sort="68">68</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 24</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 24"><strong class="mono">XT3 / 24</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="753"><span class="mono">753</span></td>
+          <td data-sort="00UHG00GP001"><span class="mono">00UHG00GP001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="999999">Не определено</td>
+          <td data-sort=" "><strong class="mono">—</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="">Данные на схеме не определены однозначно.</td>
+          <td class="action" data-sort="В монтажной документации не найдено сочетание клеммника и штифта">В монтажной документации не найдено сочетание клеммника и штифта</td>
+          <td><div class="no-image">Фрагмент не сформирован.</div></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISSING">
+          <td data-sort="69">69</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 25</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 25"><strong class="mono">XT3 / 25</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="762"><span class="mono">762</span></td>
+          <td data-sort="00UHG01GH021"><span class="mono">00UHG01GH021</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="999999">Не определено</td>
+          <td data-sort=" "><strong class="mono">—</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="">Данные на схеме не определены однозначно.</td>
+          <td class="action" data-sort="В монтажной документации не найдено сочетание клеммника и штифта">В монтажной документации не найдено сочетание клеммника и штифта</td>
+          <td><div class="no-image">Фрагмент не сформирован.</div></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISSING">
+          <td data-sort="70">70</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 26</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 26"><strong class="mono">XT3 / 26</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="763"><span class="mono">763</span></td>
+          <td data-sort="00UHG01GH021"><span class="mono">00UHG01GH021</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="999999">Не определено</td>
+          <td data-sort=" "><strong class="mono">—</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="">Данные на схеме не определены однозначно.</td>
+          <td class="action" data-sort="В монтажной документации не найдено сочетание клеммника и штифта">В монтажной документации не найдено сочетание клеммника и штифта</td>
+          <td><div class="no-image">Фрагмент не сформирован.</div></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="71">71</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 27</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 27"><strong class="mono">XT3 / 27</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="764"><span class="mono">764</span></td>
+          <td data-sort="00BHS10GS001"><span class="mono">00BHS10GS001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="52">лист 52</td>
+          <td data-sort="RB03 14"><strong class="mono">RB03 / 14</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS10GS001"><span class="mono">00BHS10GS001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 52: фактически RB03/14; KKS 00BHS10GS001">стр. 52: фактически RB03/14; KKS 00BHS10GS001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/27, на монтажной схеме RB03/14">Клемма не совпадает: в таблице XT3/27, на монтажной схеме RB03/14</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0054_1483b4a8b03e.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="72">72</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 28</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 28"><strong class="mono">XT3 / 28</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="765"><span class="mono">765</span></td>
+          <td data-sort="00BHS10GS001"><span class="mono">00BHS10GS001</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="52">лист 52</td>
+          <td data-sort="RB03 14"><strong class="mono">RB03 / 14</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS10GS001"><span class="mono">00BHS10GS001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 52: фактически RB03/14; KKS 00BHS10GS001">стр. 52: фактически RB03/14; KKS 00BHS10GS001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/28, на монтажной схеме RB03/14">Клемма не совпадает: в таблице XT3/28, на монтажной схеме RB03/14</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0054_1483b4a8b03e.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="73">73</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 29</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 29"><strong class="mono">XT3 / 29</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="766"><span class="mono">766</span></td>
+          <td data-sort="00BHS10GS001"><span class="mono">00BHS10GS001</span></td>
+          <td data-sort="C_STOP"><span class="mono">C_STOP</span></td>
+          <td class="pages" data-sort="52">лист 52</td>
+          <td data-sort="RB03 14"><strong class="mono">RB03 / 14</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS10GS001"><span class="mono">00BHS10GS001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 52: фактически RB03/14; KKS 00BHS10GS001">стр. 52: фактически RB03/14; KKS 00BHS10GS001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/29, на монтажной схеме RB03/14">Клемма не совпадает: в таблице XT3/29, на монтажной схеме RB03/14</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0054_1483b4a8b03e.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="74">74</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 30</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 30"><strong class="mono">XT3 / 30</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="767"><span class="mono">767</span></td>
+          <td data-sort="00BHS10GS002"><span class="mono">00BHS10GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="53">лист 53</td>
+          <td data-sort="RB03 15"><strong class="mono">RB03 / 15</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS10GS002"><span class="mono">00BHS10GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 53: фактически RB03/15; KKS 00BHS10GS002">стр. 53: фактически RB03/15; KKS 00BHS10GS002</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/30, на монтажной схеме RB03/15">Клемма не совпадает: в таблице XT3/30, на монтажной схеме RB03/15</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0055_d7a63e3eab12.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="75">75</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 31</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 31"><strong class="mono">XT3 / 31</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="768"><span class="mono">768</span></td>
+          <td data-sort="00BHS10GS002"><span class="mono">00BHS10GS002</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="53">лист 53</td>
+          <td data-sort="RB03 15"><strong class="mono">RB03 / 15</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS10GS002"><span class="mono">00BHS10GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 53: фактически RB03/15; KKS 00BHS10GS002">стр. 53: фактически RB03/15; KKS 00BHS10GS002</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/31, на монтажной схеме RB03/15">Клемма не совпадает: в таблице XT3/31, на монтажной схеме RB03/15</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0055_d7a63e3eab12.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="76">76</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 32</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 32"><strong class="mono">XT3 / 32</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="769"><span class="mono">769</span></td>
+          <td data-sort="00BHS10GS002"><span class="mono">00BHS10GS002</span></td>
+          <td data-sort="C_STOP"><span class="mono">C_STOP</span></td>
+          <td class="pages" data-sort="53">лист 53</td>
+          <td data-sort="RB03 15"><strong class="mono">RB03 / 15</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS10GS002"><span class="mono">00BHS10GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 53: фактически RB03/15; KKS 00BHS10GS002">стр. 53: фактически RB03/15; KKS 00BHS10GS002</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/32, на монтажной схеме RB03/15">Клемма не совпадает: в таблице XT3/32, на монтажной схеме RB03/15</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0055_d7a63e3eab12.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="77">77</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 33</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 33"><strong class="mono">XT3 / 33</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="770"><span class="mono">770</span></td>
+          <td data-sort="00BHS20GS001"><span class="mono">00BHS20GS001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="56">лист 56</td>
+          <td data-sort="RB05 1"><strong class="mono">RB05 / 1</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS20GS001"><span class="mono">00BHS20GS001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 56: фактически RB05/1; KKS 00BHS20GS001">стр. 56: фактически RB05/1; KKS 00BHS20GS001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/33, на монтажной схеме RB05/1">Клемма не совпадает: в таблице XT3/33, на монтажной схеме RB05/1</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0056_b421148721dc.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="78">78</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 34</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 34"><strong class="mono">XT3 / 34</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="771"><span class="mono">771</span></td>
+          <td data-sort="00BHS20GS001"><span class="mono">00BHS20GS001</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="56">лист 56</td>
+          <td data-sort="RB05 1"><strong class="mono">RB05 / 1</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS20GS001"><span class="mono">00BHS20GS001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 56: фактически RB05/1; KKS 00BHS20GS001">стр. 56: фактически RB05/1; KKS 00BHS20GS001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/34, на монтажной схеме RB05/1">Клемма не совпадает: в таблице XT3/34, на монтажной схеме RB05/1</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0056_b421148721dc.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="79">79</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 35</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 35"><strong class="mono">XT3 / 35</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="772"><span class="mono">772</span></td>
+          <td data-sort="00BHS20GS001"><span class="mono">00BHS20GS001</span></td>
+          <td data-sort="C_STOP"><span class="mono">C_STOP</span></td>
+          <td class="pages" data-sort="56">лист 56</td>
+          <td data-sort="RB05 1"><strong class="mono">RB05 / 1</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS20GS001"><span class="mono">00BHS20GS001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 56: фактически RB05/1; KKS 00BHS20GS001">стр. 56: фактически RB05/1; KKS 00BHS20GS001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/35, на монтажной схеме RB05/1">Клемма не совпадает: в таблице XT3/35, на монтажной схеме RB05/1</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0056_b421148721dc.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="80">80</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 36</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 36"><strong class="mono">XT3 / 36</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="773"><span class="mono">773</span></td>
+          <td data-sort="00BHS20GS002"><span class="mono">00BHS20GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="57">лист 57</td>
+          <td data-sort="RB05 2"><strong class="mono">RB05 / 2</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS20GS002"><span class="mono">00BHS20GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 57: фактически RB05/2; KKS 00BHS20GS002">стр. 57: фактически RB05/2; KKS 00BHS20GS002</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/36, на монтажной схеме RB05/2">Клемма не совпадает: в таблице XT3/36, на монтажной схеме RB05/2</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0057_a13f6a078ae6.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="81">81</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 37</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 37"><strong class="mono">XT3 / 37</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort="774"><span class="mono">774</span></td>
+          <td data-sort="00BHS20GS002"><span class="mono">00BHS20GS002</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="57">лист 57</td>
+          <td data-sort="RB05 2"><strong class="mono">RB05 / 2</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS20GS002"><span class="mono">00BHS20GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 57: фактически RB05/2; KKS 00BHS20GS002">стр. 57: фактически RB05/2; KKS 00BHS20GS002</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/37, на монтажной схеме RB05/2">Клемма не совпадает: в таблице XT3/37, на монтажной схеме RB05/2</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0057_a13f6a078ae6.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="82">82</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 38</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 38"><strong class="mono">XT3 / 38</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS10GS002"><span class="mono">00BHS10GS002</span></td>
+          <td data-sort="C_STOP"><span class="mono">C_STOP</span></td>
+          <td class="pages" data-sort="53">лист 53</td>
+          <td data-sort="RB03 15"><strong class="mono">RB03 / 15</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS10GS002"><span class="mono">00BHS10GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 53: фактически RB03/15; KKS 00BHS10GS002">стр. 53: фактически RB03/15; KKS 00BHS10GS002</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/38, на монтажной схеме RB03/15">Клемма не совпадает: в таблице XT3/38, на монтажной схеме RB03/15</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0055_d7a63e3eab12.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="83">83</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 39</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 39"><strong class="mono">XT3 / 39</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS001"><span class="mono">00BHS30GS001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="60">лист 60</td>
+          <td data-sort="RB06 1"><strong class="mono">RB06 / 1</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS001"><span class="mono">00BHS30GS001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 60: фактически RB06/1; KKS 00BHS30GS001">стр. 60: фактически RB06/1; KKS 00BHS30GS001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/39, на монтажной схеме RB06/1">Клемма не совпадает: в таблице XT3/39, на монтажной схеме RB06/1</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0058_2d384cdc95dd.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="84">84</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 40</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 40"><strong class="mono">XT3 / 40</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS001"><span class="mono">00BHS30GS001</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="60">лист 60</td>
+          <td data-sort="RB06 1"><strong class="mono">RB06 / 1</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS001"><span class="mono">00BHS30GS001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 60: фактически RB06/1; KKS 00BHS30GS001">стр. 60: фактически RB06/1; KKS 00BHS30GS001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/40, на монтажной схеме RB06/1">Клемма не совпадает: в таблице XT3/40, на монтажной схеме RB06/1</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0058_2d384cdc95dd.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="85">85</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 41</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 41"><strong class="mono">XT3 / 41</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS001"><span class="mono">00BHS30GS001</span></td>
+          <td data-sort="C_STOP"><span class="mono">C_STOP</span></td>
+          <td class="pages" data-sort="60">лист 60</td>
+          <td data-sort="RB06 1"><strong class="mono">RB06 / 1</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS001"><span class="mono">00BHS30GS001</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 60: фактически RB06/1; KKS 00BHS30GS001">стр. 60: фактически RB06/1; KKS 00BHS30GS001</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/41, на монтажной схеме RB06/1">Клемма не совпадает: в таблице XT3/41, на монтажной схеме RB06/1</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0058_2d384cdc95dd.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="86">86</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="24">лист 24, строка 42</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 42"><strong class="mono">XT3 / 42</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS002"><span class="mono">00BHS30GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="61">лист 61</td>
+          <td data-sort="RB06 2"><strong class="mono">RB06 / 2</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS002"><span class="mono">00BHS30GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 61: фактически RB06/2; KKS 00BHS30GS002">стр. 61: фактически RB06/2; KKS 00BHS30GS002</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/42, на монтажной схеме RB06/2">Клемма не совпадает: в таблице XT3/42, на монтажной схеме RB06/2</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0059_b46f355b2e77.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="87">87</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="25">лист 25, строка 1</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 43"><strong class="mono">XT3 / 43</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS002"><span class="mono">00BHS30GS002</span></td>
+          <td data-sort="C_START"><span class="mono">C_START</span></td>
+          <td class="pages" data-sort="61">лист 61</td>
+          <td data-sort="RB06 2"><strong class="mono">RB06 / 2</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS002"><span class="mono">00BHS30GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 61: фактически RB06/2; KKS 00BHS30GS002">стр. 61: фактически RB06/2; KKS 00BHS30GS002</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/43, на монтажной схеме RB06/2">Клемма не совпадает: в таблице XT3/43, на монтажной схеме RB06/2</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0059_b46f355b2e77.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="88">88</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="25">лист 25, строка 2</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 44"><strong class="mono">XT3 / 44</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS002"><span class="mono">00BHS30GS002</span></td>
+          <td data-sort="C_STOP"><span class="mono">C_STOP</span></td>
+          <td class="pages" data-sort="61">лист 61</td>
+          <td data-sort="RB06 2"><strong class="mono">RB06 / 2</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS002"><span class="mono">00BHS30GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 61: фактически RB06/2; KKS 00BHS30GS002">стр. 61: фактически RB06/2; KKS 00BHS30GS002</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/44, на монтажной схеме RB06/2">Клемма не совпадает: в таблице XT3/44, на монтажной схеме RB06/2</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0059_b46f355b2e77.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="89">89</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="25">лист 25, строка 3</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 45"><strong class="mono">XT3 / 45</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS002"><span class="mono">00BHS30GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="61">лист 61</td>
+          <td data-sort="RB06 2"><strong class="mono">RB06 / 2</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS002"><span class="mono">00BHS30GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 61: фактически RB06/2; KKS 00BHS30GS002">стр. 61: фактически RB06/2; KKS 00BHS30GS002</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/45, на монтажной схеме RB06/2">Клемма не совпадает: в таблице XT3/45, на монтажной схеме RB06/2</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0059_b46f355b2e77.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="90">90</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="25">лист 25, строка 4</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 46"><strong class="mono">XT3 / 46</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS002"><span class="mono">00BHS30GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="pages" data-sort="61">лист 61</td>
+          <td data-sort="RB06 2"><strong class="mono">RB06 / 2</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00BHS30GS002"><span class="mono">00BHS30GS002</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 61: фактически RB06/2; KKS 00BHS30GS002">стр. 61: фактически RB06/2; KKS 00BHS30GS002</td>
+          <td class="action" data-sort="Клемма не совпадает: в таблице XT3/46, на монтажной схеме RB06/2">Клемма не совпадает: в таблице XT3/46, на монтажной схеме RB06/2</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0059_b46f355b2e77.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="91">91</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="25">лист 25, строка 5</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 47"><strong class="mono">XT3 / 47</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="00CJF03BO315P_08"><span class="mono">00CJF03BO315P_08</span></td>
+          <td class="pages" data-sort="999999">Не определено</td>
+          <td data-sort=" "><strong class="mono">—</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="">Данные на схеме не определены однозначно.</td>
+          <td class="action" data-sort="Резервное подключение не показано отдельным клеммником на монтажных схемах">Резервное подключение не показано отдельным клеммником на монтажных схемах</td>
+          <td><div class="no-image">Фрагмент не сформирован.</div></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="92">92</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="25">лист 25, строка 6</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 48"><strong class="mono">XT3 / 48</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="00CJF03BO315P_08"><span class="mono">00CJF03BO315P_08</span></td>
+          <td class="pages" data-sort="999999">Не определено</td>
+          <td data-sort=" "><strong class="mono">—</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="">Данные на схеме не определены однозначно.</td>
+          <td class="action" data-sort="Резервное подключение не показано отдельным клеммником на монтажных схемах">Резервное подключение не показано отдельным клеммником на монтажных схемах</td>
+          <td><div class="no-image">Фрагмент не сформирован.</div></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="93">93</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="25">лист 25, строка 7</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 49"><strong class="mono">XT3 / 49</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="00CJF03BO315P_09"><span class="mono">00CJF03BO315P_09</span></td>
+          <td class="pages" data-sort="999999">Не определено</td>
+          <td data-sort=" "><strong class="mono">—</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="">Данные на схеме не определены однозначно.</td>
+          <td class="action" data-sort="Резервное подключение не показано отдельным клеммником на монтажных схемах">Резервное подключение не показано отдельным клеммником на монтажных схемах</td>
+          <td><div class="no-image">Фрагмент не сформирован.</div></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="94">94</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="25">лист 25, строка 8</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="XT3 50"><strong class="mono">XT3 / 50</strong><br><span class="empty-value">тип: 8002099558</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="00CJF03BO315P_09"><span class="mono">00CJF03BO315P_09</span></td>
+          <td class="pages" data-sort="999999">Не определено</td>
+          <td data-sort=" "><strong class="mono">—</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="">Данные на схеме не определены однозначно.</td>
+          <td class="action" data-sort="Резервное подключение не показано отдельным клеммником на монтажных схемах">Резервное подключение не показано отдельным клеммником на монтажных схемах</td>
+          <td><div class="no-image">Фрагмент не сформирован.</div></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="95">95</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="29">лист 29, строка 9</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="RA05 8С"><strong class="mono">RA05 / 8С</strong><br><span class="empty-value">тип: UM-DBC16M</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00USE11CF001"><span class="mono">00USE11CF001</span></td>
+          <td data-sort="M"><span class="mono">M</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="RA05 8C"><strong class="mono">RA05 / 8C</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: RA05/8С; провод не требуется">стр. 7: RA05/8С; провод не требуется</td>
+          <td class="action" data-sort="KKS 00USE11CF001 не найден на монтажной странице">KKS 00USE11CF001 не найден на монтажной странице</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0060_096aa7e2e412.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="96">96</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="29">лист 29, строка 19</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="RA05 13С"><strong class="mono">RA05 / 13С</strong><br><span class="empty-value">тип: UM-DBC16M</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00USE13CF001"><span class="mono">00USE13CF001</span></td>
+          <td data-sort="M"><span class="mono">M</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="RA05 13C"><strong class="mono">RA05 / 13C</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: RA05/13С; провод не требуется">стр. 7: RA05/13С; провод не требуется</td>
+          <td class="action" data-sort="KKS 00USE13CF001 не найден на монтажной странице">KKS 00USE13CF001 не найден на монтажной странице</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0061_63bd492fa0f6.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="MISMATCH">
+          <td data-sort="97">97</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="29">лист 29, строка 34</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="RA05 11С"><strong class="mono">RA05 / 11С</strong><br><span class="empty-value">тип: UM-DBC16M</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="00USE16CF001"><span class="mono">00USE16CF001</span></td>
+          <td data-sort="M"><span class="mono">M</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="RA05 11C"><strong class="mono">RA05 / 11C</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: RA05/11С; провод не требуется">стр. 7: RA05/11С; провод не требуется</td>
+          <td class="action" data-sort="KKS 00USE16CF001 не найден на монтажной странице">KKS 00USE16CF001 не найден на монтажной странице</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0062_07559692f89e.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+        <tr class="issue-row" data-report="3" data-kind="REVIEW">
+          <td data-sort="98">98</td>
+          <td data-sort="ИК.3912-АТХ3.116_30.06.2026.pdf ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34"><strong>ИК.3912-АТХ3.116_30.06.2026.pdf</strong><br><span class="empty-value">Папка: ИК.3912-АТХ3.116_30.06.2026_отчет_2026-07-02_12-01-34</span></td>
+          <td data-sort="29">лист 29, строка 39</td>
+          <td data-sort="00CJF03"><span class="mono">00CJF03</span></td>
+          <td data-sort="RA05 12С"><strong class="mono">RA05 / 12С</strong><br><span class="empty-value">тип: UM-DBC16M</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort="Резерв"><span class="mono">Резерв</span></td>
+          <td data-sort="M"><span class="mono">M</span></td>
+          <td class="pages" data-sort="7">лист 7</td>
+          <td data-sort="RA05 12C"><strong class="mono">RA05 / 12C</strong></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td data-sort=""><span class="mono">—</span></td>
+          <td class="findings" data-sort="стр. 7: RA05/12С; провод не требуется">стр. 7: RA05/12С; провод не требуется</td>
+          <td class="action" data-sort="Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода">Клемма найдена, но резервный статус канала не удалось подтвердить подписью или маркировкой провода</td>
+          <td><button class="preview-button" type="button" title="Открыть фрагмент"><img loading="lazy" src="assets/evidence/evidence_0063_01dfaa9b14d7.png" alt="Фрагмент монтажной схемы"></button></td>
+        </tr>
+        
+      </tbody>
+      
+    </table>
+  </div>
+  
+</main>
+<footer>Сформирован 02.07.2026 12:05:40. Документ предназначен для согласования и внесения проектных правок.</footer>
+<div id="image-modal" role="dialog" aria-modal="true" aria-label="Фрагмент монтажной схемы"><button type="button" aria-label="Закрыть">×</button><img alt="Увеличенный фрагмент монтажной схемы"></div>
+<script>
+(() => {
+  const table = document.getElementById('issues-table');
+  if (!table) return;
+  const rows = Array.from(table.querySelectorAll('tr.issue-row'));
+  const separators = Array.from(table.querySelectorAll('tr.report-separator'));
+  const search = document.getElementById('search');
+  const reportFilter = document.getElementById('report-filter');
+  const kindFilter = document.getElementById('kind-filter');
+  const count = document.getElementById('visible-count');
+  const reset = document.getElementById('reset');
+
+  function applyFilters() {
+    const query = search.value.trim().toLocaleLowerCase('ru');
+    const report = reportFilter.value;
+    const kind = kindFilter.value;
+    let visible = 0;
+    const visibleGroups = new Set();
+    rows.forEach(row => {
+      const show = (!query || row.textContent.toLocaleLowerCase('ru').includes(query)) &&
+        (report === 'ALL' || row.dataset.report === report) &&
+        (kind === 'ALL' || row.dataset.kind === kind);
+      row.hidden = !show;
+      if (show) { visible += 1; visibleGroups.add(row.dataset.report); }
+    });
+    separators.forEach(separator => {
+      const group = separator.closest('tbody').dataset.reportGroup;
+      separator.hidden = !visibleGroups.has(group);
+    });
+    count.textContent = `Показано: ${visible} из ${rows.length}`;
+  }
+  [search, reportFilter, kindFilter].forEach(control => control.addEventListener('input', applyFilters));
+  reset.addEventListener('click', () => { search.value = ''; reportFilter.value = 'ALL'; kindFilter.value = 'ALL'; applyFilters(); search.focus(); });
+
+  const firstHeaderRow = table.tHead.rows[0];
+  const secondHeaderRow = table.tHead.rows[1];
+  const sortableHeaders = [];
+  let columnIndex = 0;
+  Array.from(firstHeaderRow.cells).forEach(cell => {
+    const span = Number(cell.colSpan || 1);
+    if (cell.rowSpan === 2 && cell.classList.contains('sortable')) sortableHeaders.push([cell, columnIndex]);
+    columnIndex += span;
+  });
+  Array.from(secondHeaderRow.cells).forEach((cell, index) => {
+    if (cell.classList.contains('sortable')) sortableHeaders.push([cell, index + 2]);
+  });
+  let activeColumn = -1;
+  let direction = 1;
+  function cellValue(row, index) { const cell = row.cells[index]; return (cell?.dataset.sort || cell?.textContent || '').trim(); }
+  function sortRows(header, index) {
+    direction = activeColumn === index ? -direction : 1;
+    activeColumn = index;
+    sortableHeaders.forEach(([item]) => item.removeAttribute('data-direction'));
+    header.dataset.direction = direction > 0 ? 'asc' : 'desc';
+    const type = header.dataset.type || 'text';
+    Array.from(table.tBodies).forEach(tbody => {
+      const issueRows = Array.from(tbody.querySelectorAll('tr.issue-row'));
+      issueRows.sort((a, b) => {
+        let av = cellValue(a, index), bv = cellValue(b, index);
+        if (type === 'number') { av = Number.parseFloat(av) || 0; bv = Number.parseFloat(bv) || 0; return (av - bv) * direction; }
+        return av.localeCompare(bv, 'ru', {numeric: true, sensitivity: 'base'}) * direction;
+      });
+      issueRows.forEach(row => tbody.appendChild(row));
+    });
+  }
+  sortableHeaders.forEach(([header, index]) => header.addEventListener('click', () => sortRows(header, index)));
+
+  const modal = document.getElementById('image-modal');
+  const modalImage = modal.querySelector('img');
+  function closeModal() { modal.classList.remove('open'); modalImage.removeAttribute('src'); }
+  document.querySelectorAll('.preview-button').forEach(button => button.addEventListener('click', () => { modalImage.src = button.querySelector('img').src; modal.classList.add('open'); }));
+  modal.querySelector('button').addEventListener('click', closeModal);
+  modal.addEventListener('click', event => { if (event.target === modal) closeModal(); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeModal(); });
+})();
+</script>
+</body>
+</html>

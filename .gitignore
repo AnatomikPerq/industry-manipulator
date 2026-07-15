@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Логи
+*.log
+
+# Результаты анализа и промежуточные данные (генерируются при каждом прогоне)
+/analyzer_to_errors/output/
+/analyzer_to_errors/data/manifest.json
+/analyzer_to_errors/data/.doc_types.json
+
+# Извлечённые данные по документам (папка на каждый входной документ)
+/analyzer_to_errors/data/*/
+!/analyzer_to_errors/data/base_files/
+!/analyzer_to_errors/data/base_analysis_scripts/
+!/analyzer_to_errors/data/your_helping_scripts_and_files/
+
+# Рабочая папка агента - служебная, наполняется на прогоне
+/analyzer_to_errors/data/your_helping_scripts_and_files/*
+!/analyzer_to_errors/data/your_helping_scripts_and_files/.gitkeep
