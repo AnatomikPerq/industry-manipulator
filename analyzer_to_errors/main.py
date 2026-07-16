@@ -325,6 +325,33 @@ def preflight_llm(cfg: dict) -> None:
     logger.info("Серверы ИИ доступны, запускаю агентов")
 
 
+def _remove_path(path: Path, retries: int = 5, delay: float = 0.3) -> None:
+    """Удаляет файл или папку с повторными попытками.
+
+    На Windows файл иногда на миг остаётся занят сторонним процессом (антивирус,
+    индексатор Проводника, недавно закрытый PDF-парсер) - первая попытка падает с
+    WinError 32. Если так и не получилось за все попытки - не роняем весь пайплайн
+    из-за одной неубранной папки прошлого прогона, а лишь предупреждаем: она
+    останется и будет убрана на следующей очистке."""
+    import shutil
+    import time as _time
+
+    last_err = None
+    for _ in range(retries):
+        try:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+            return
+        except FileNotFoundError:
+            return
+        except OSError as e:
+            last_err = e
+            _time.sleep(delay)
+    logger.warning("Не удалось удалить %s (файл занят другим процессом): %s", path, last_err)
+
+
 def clear_previous_results(cfg: dict) -> None:
     """Стирает результаты прошлого анализа перед новым прогоном: папку output
     целиком и извлечённые данные в data/ (папки документов + manifest.json).
@@ -333,12 +360,10 @@ def clear_previous_results(cfg: dict) -> None:
     (скрипты-парсеры) и your_helping_scripts_and_files - это не результаты, а вход
     и инструментарий. Их имена берём из config.paths, чтобы не удалить лишнего.
     """
-    import shutil
-
     out_dir = resolve_path(cfg["paths"]["output_dir"])
     if out_dir.exists():
         for item in out_dir.iterdir():
-            item.unlink() if item.is_file() else shutil.rmtree(item)
+            _remove_path(item)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     data_dir = resolve_path(cfg["paths"]["input_dir"])
@@ -351,13 +376,13 @@ def clear_previous_results(cfg: dict) -> None:
         for item in data_dir.iterdir():
             if item.name in keep:
                 continue
-            item.unlink() if item.is_file() else shutil.rmtree(item)
+            _remove_path(item)
 
     # рабочую папку агента чистим ОТ содержимого, но саму папку оставляем
     helper = resolve_path(cfg["paths"]["helper_scripts_dir"])
     if helper.exists():
         for item in helper.iterdir():
-            item.unlink() if item.is_file() else shutil.rmtree(item)
+            _remove_path(item)
     logger.info("Результаты прошлого анализа очищены (output/ и data/<документы>/)")
 
 
