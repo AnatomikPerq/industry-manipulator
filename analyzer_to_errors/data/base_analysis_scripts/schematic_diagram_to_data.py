@@ -27,6 +27,19 @@ from collections import defaultdict
 
 import fitz  # PyMuPDF
 
+# Профили (диалекты) оформления схем: набор форматно-зависимых regex'ов на
+# каждый шаблон бюро + авто-детект. См. profiles.py. Импорт устроен так,
+# чтобы скрипт работал и при прямом запуске, и как импортируемый модуль.
+try:
+    from . import profiles  # type: ignore
+except ImportError:
+    import os as _os
+    import importlib.util as _ilu
+    _pspec = _ilu.spec_from_file_location(
+        "profiles", _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "profiles.py"))
+    profiles = _ilu.module_from_spec(_pspec)
+    _pspec.loader.exec_module(profiles)
+
 
 # ============================================================
 # ЧАСТЬ 1: сырое извлечение (текст + вектора) из PDF
@@ -81,13 +94,38 @@ def _readability_score(text: str) -> float:
     return good / max(total, 1)
 
 
+def _demojibake(text, codec):
+    """Развернуть mojibake (cp1251-байты, прочитанные как latin1) обратно.
+
+    Устойчиво к СМЕШАННОМУ содержимому: если в строке есть символы вне latin1
+    (напр. '…' U+2026 из "-10…+80°C" или уже корректная кириллица), обычный
+    text.encode('latin1') упал бы на всей строке и НИЧЕГО бы не починил. Здесь
+    посимвольно: латин1-совместимые символы разворачиваем через codec (все
+    кириллические однобайтовые кодировки посимвольны), остальные оставляем как
+    есть. Один посторонний символ больше не рушит расшифровку всего листа.
+    """
+    try:
+        return text.encode("latin1").decode(codec)
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        out = []
+        for ch in text:
+            if ord(ch) <= 0xFF:
+                try:
+                    out.append(ch.encode("latin1").decode(codec))
+                except (UnicodeEncodeError, UnicodeDecodeError):
+                    out.append(ch)
+            else:
+                out.append(ch)
+        return "".join(out)
+
+
 def detect_font_fix(sample_text, min_margin=0.08):
     base = _readability_score(sample_text)
     best_enc, best_score = None, base
     for enc in ENCODING_CANDIDATES:
         try:
-            fixed = sample_text.encode("latin1").decode(enc)
-        except (UnicodeEncodeError, UnicodeDecodeError, LookupError):
+            fixed = _demojibake(sample_text, enc)
+        except LookupError:
             continue
         s = _readability_score(fixed)
         if s > best_score:
@@ -100,10 +138,7 @@ def detect_font_fix(sample_text, min_margin=0.08):
 def apply_font_fix(text, codec):
     if not codec:
         return text
-    try:
-        return text.encode("latin1").decode(codec)
-    except (UnicodeEncodeError, UnicodeDecodeError):
-        return text
+    return _demojibake(text, codec)
 
 
 def analyze_fonts(pdf_path):
@@ -246,7 +281,7 @@ def extract_raw(pdf_path):
     return pages, font_fix_map
 
 
-def merge_split_tags(raw_pages):
+def merge_split_tags(raw_pages, profile=None):
     """
     Иногда EPLAN кладёт одно обозначение как ДВА отдельных текстовых
     объекта PDF ("XM" и "9" рядом, без пробела, вместо единого "XM9").
@@ -261,6 +296,11 @@ def merge_split_tags(raw_pages):
     исключает случайное слипание двух не связанных подписей, стоящих
     рядом (частый риск при "склеить всё подряд, что близко").
     """
+    profile = profile or profiles.DEFAULT_PROFILE
+    device_tag_re = profile.device_tag_re
+    device_tag_complete_re = profile.device_tag_complete_re
+    kks_tag_re = profile.kks_tag_re
+
     merged_count = 0
     Y_TOL = 2.0
     # Реальный зазор между "XM" и "9" на схеме ~8.8pt -- между ними
@@ -270,14 +310,11 @@ def merge_split_tags(raw_pages):
     # только когда `a` -- "голый" префикс тега БЕЗ цифры (already_valid
     # ложно только в этом случае), что редкая, специфичная ситуация.
     X_GAP_MAX = 10.0
-    # DEVICE_TAG_RE допускает 0 цифр (нужно для реестра тегов без номера),
+    # device_tag_re допускает 0 цифр (нужно для реестра тегов без номера),
     # но это значит, что голое "XM" само по себе уже "проходит" этот
     # regex -- и проверка "a само по себе ещё не валиден" никогда не
-    # сработает. Для этой конкретной проверки нужен более строгий вариант,
-    # требующий хотя бы одну цифру (на практике голых тегов без номера
-    # почти не бывает -- это всегда оборванная половина "XM9", "XB003").
-    DEVICE_TAG_COMPLETE_RE = re.compile(
-        r'^(AA|BA|CA|CB|RA|RB|XM|XB|XA|XT|XP[AB]|XS|QF|SF|SQ|VD|EL|SK|SFD|FU|U)\d{1,3}$')
+    # сработает. Для этой конкретной проверки нужен более строгий вариант
+    # (device_tag_complete_re), требующий хотя бы одну цифру.
 
     for page in raw_pages:
         spans = page["text_spans"]
@@ -306,9 +343,17 @@ def merge_split_tags(raw_pages):
                 if abs(a["bbox"][1] - b["bbox"][1]) > Y_TOL:
                     continue
                 combo = a["text"] + b["text"]
-                already_valid = DEVICE_TAG_COMPLETE_RE.match(a["text"]) or KKS_TAG_RE.match(a["text"])
-                combo_valid = DEVICE_TAG_RE.match(combo) or KKS_TAG_RE.match(combo)
-                if combo_valid and not already_valid:
+                already_valid = device_tag_complete_re.match(a["text"]) or kks_tag_re.match(a["text"])
+                combo_valid = device_tag_re.match(combo) or kks_tag_re.match(combo)
+                # Не склеивать через границу самостоятельной сущности: если левый
+                # или правый span сам по себе -- уже осмысленный токен (межлистовая
+                # ссылка "4.7.0", готовый номер и т.п.), их нельзя слипать в
+                # псевдо-тег. Без этой проверки широкий device-regex профиля B
+                # склеивал power-pin "N" + ссылку "4.7.0" в фейковый "N4.7.0",
+                # уничтожая и ссылку, и power-pin.
+                b_is_standalone = (profile.parse_cross_ref(b["text"]) is not None
+                                   or profile.parse_cross_ref(a["text"]) is not None)
+                if combo_valid and not already_valid and not b_is_standalone:
                     merged_bbox = [
                         min(a["bbox"][0], b["bbox"][0]), min(a["bbox"][1], b["bbox"][1]),
                         max(a["bbox"][2], b["bbox"][2]), max(a["bbox"][3], b["bbox"][3]),
@@ -333,95 +378,33 @@ def merge_split_tags(raw_pages):
 # ============================================================
 # ЧАСТЬ 2: классификация текстовых span'ов по типу
 # ============================================================
-
-CROSS_REF_RE = re.compile(r'^/?\d{1,3}\.\d{1,2}:[A-F]$')
-DEVICE_TAG_RE = re.compile(r'^(AA|BA|CA|CB|RA|RB|XM|XB|XA|XT|XP[AB]|XS|QF|SF|SQ|VD|EL|SK|SFD|FU|U)\d{0,3}$')
-IO_CHANNEL_RE = re.compile(r'^(AI|AO|DI|DO)\d{1,2}$')
-WIRE_GAUGE_RE = re.compile(r'^\d+([.,]\d+)?\s*мм²$')
-MODULE_PARTNO_RE = re.compile(r'^R500\s')
-CABLE_TYPE_RE = re.compile(r'^\d+[хx]\d+[хx][\d,.]+$|^КДВВГ')
-KKS_TAG_RE = re.compile(r'^00[A-Z]{2,4}\d{2}[A-Z]{2}\d{3}$|^00CJF02')
-PIN_REF_RE = re.compile(r'^\d{1,2}-\d$')
-PLAIN_NUM_RE = re.compile(r'^\d{1,4}$')
-GRID_DIGIT_RE = re.compile(r'^[1-9]$')
-SIGNAL_STATE_RE = re.compile(r'^(FB_[A-Z]+|C_[A-Z]+)$')
-POWER_PIN_RE = re.compile(r'^(PE|0V|\+24|24V|X1|X2|X3|A1|A2|L|N)$')
-RESERVE_RE = re.compile(r'^Резерв$')
-COIL_TERMINAL_RE = re.compile(r'^\d{1,2}С$')
-CONNECTOR_GLYPH = {'-', '/', '+'}
-PAGE_FRAME_WORDS = {
-    'Формат  А3', 'Инв.N подл.', 'Взам. инв. N', 'Подп. и дата', 'Лист',
-    'Подп.', '№док.', 'Дата', 'Изм.', 'Кол.уч', 'Зам.', 'A', 'B', 'C', 'D', 'E', 'F',
-}
+# ВНИМАНИЕ: сами regex'ы классификации теперь живут в profiles.py (по одному
+# набору на шаблон оформления). Здесь их больше НЕТ -- правьте profiles.py
+# (PROFILE_A для старого шаблона Regul/KKS, PROFILE_B для ОВЕН/IEC).
 
 
-def classify_span(text, size, bbox=None, page_width=None, page_height=None):
+def classify_span(text, size, bbox=None, page_width=None, page_height=None, profile=None):
+    """Тип одного текстового span'а. Сами правила живут в профиле (profiles.py):
+    для разных бюро форматы обозначений разные, а логика пайплайна -- одна."""
+    profile = profile or profiles.DEFAULT_PROFILE
     t = text.strip()
-    if t in PAGE_FRAME_WORDS:
-        return "page_frame"
-    if GRID_DIGIT_RE.match(t):
-        # Цифры 1..9 -- это либо координатная сетка по краю листа
-        # ("9 8 7 6 5 4 3 2 1" сверху/снизу штампа), либо номер клеммы/
-        # вывода где-то в теле схемы. Раньше оба случая падали в
-        # "page_frame", из-за чего однозначные номера клемм (XA001:1..8
-        # и т.п.) теряли классификацию и не участвовали ни в разметке
-        # графа, ни в проверке порядка клемм. Разделяем по позиции:
-        # сетка всегда лежит в узкой полосе у самого края листа.
-        if bbox is not None and page_height is not None:
-            margin = 20.0
-            y0 = bbox[1]
-            if y0 <= margin or y0 >= page_height - margin:
-                return "page_frame"
-            return "terminal_no"
-        return "page_frame"
-    if t in CONNECTOR_GLYPH:
-        return "glyph"
-    if SIGNAL_STATE_RE.match(t):
-        return "signal_state"
-    if POWER_PIN_RE.match(t):
-        return "power_pin"
-    if RESERVE_RE.match(t):
-        return "reserve_label"
-    if COIL_TERMINAL_RE.match(t):
-        return "coil_terminal"
-    if CROSS_REF_RE.match(t):
-        return "cross_ref"
-    if IO_CHANNEL_RE.match(t):
-        return "io_channel"
-    if WIRE_GAUGE_RE.match(t):
-        return "wire_gauge"
-    if MODULE_PARTNO_RE.match(t):
-        return "module_partno"
-    if CABLE_TYPE_RE.match(t):
-        return "cable_type"
-    if KKS_TAG_RE.match(t):
-        return "instrument_tag"
-    if DEVICE_TAG_RE.match(t):
-        return "device_tag"
-    if PIN_REF_RE.match(t):
-        return "pin_ref"
-    if PLAIN_NUM_RE.match(t):
-        return "terminal_no"
-    if t.startswith('ИК.'):
-        return "doc_number"
-    if re.match(r'^\d{2}\.\d{2}$', t):
-        return "date"
-    if len(t) > 15 and any(c.isalpha() for c in t) and size > 3:
-        return "long_text"
-    return "unclassified"
+    return profile.classify_span(t, size, bbox, page_width, page_height)
 
 
-def classify_pages(raw_pages):
+def classify_pages(raw_pages, profile=None):
+    profile = profile or profiles.DEFAULT_PROFILE
     counts = defaultdict(int)
     for page in raw_pages:
         for span in page["text_spans"]:
             cls = classify_span(span["text"], span["size"],
                                  bbox=span["bbox"],
                                  page_width=page["width"],
-                                 page_height=page["height"])
+                                 page_height=page["height"],
+                                 profile=profile)
             span["entity_type"] = cls
             counts[cls] += 1
-    print("  [classify] entity type counts:", dict(counts), file=sys.stderr)
+    print(f"  [classify] профиль «{profile.name}», entity type counts:",
+          dict(counts), file=sys.stderr)
     return raw_pages
 
 
@@ -547,16 +530,18 @@ def _nearest_span(x, y, spans, max_dist, allowed_types):
     return best, best_d
 
 
-def _attach_labels(x, y, spans, max_link_dist):
+def _attach_labels(x, y, spans, max_link_dist, label_types=LABEL_TYPES):
     labels = []
-    for lt in LABEL_TYPES:
+    for lt in label_types:
         span, d = _nearest_span(x, y, spans, max_link_dist, {lt})
         if span:
             labels.append({"type": lt, "text": span["text"], "dist": round(d, 2)})
     return labels
 
 
-def build_page_graph(page, max_link_dist=12.0):
+def build_page_graph(page, max_link_dist=12.0, profile=None):
+    profile = profile or profiles.DEFAULT_PROFILE
+    label_types = profile.label_types
     raw_lines = page["lines"]
     spans = page["text_spans"]
 
@@ -572,16 +557,16 @@ def build_page_graph(page, max_link_dist=12.0):
             only_idx = pl["line_indices"][0]
             l = wire_candidates[only_idx]
             if _seg_len(l) < GLYPH_MAX_LEN and (l.get("width") or 0) < GLYPH_MAX_WIDTH:
-                _, da = _nearest_span(ax, ay, spans, max_link_dist, set(LABEL_TYPES))
-                _, db = _nearest_span(bx, by, spans, max_link_dist, set(LABEL_TYPES))
+                _, da = _nearest_span(ax, ay, spans, max_link_dist, set(label_types))
+                _, db = _nearest_span(bx, by, spans, max_link_dist, set(label_types))
                 if da is None and db is None:
                     continue
 
         na = {"id": len(nodes), "page": page["page_number"], "x": ax, "y": ay,
-              "labels": _attach_labels(ax, ay, spans, max_link_dist)}
+              "labels": _attach_labels(ax, ay, spans, max_link_dist, label_types)}
         nodes.append(na)
         nb = {"id": len(nodes), "page": page["page_number"], "x": bx, "y": by,
-              "labels": _attach_labels(bx, by, spans, max_link_dist)}
+              "labels": _attach_labels(bx, by, spans, max_link_dist, label_types)}
         nodes.append(nb)
         edges.append({
             "page": page["page_number"],
@@ -599,8 +584,8 @@ def build_page_graph(page, max_link_dist=12.0):
     for i, s in enumerate(sorted_spans):
         if s["entity_type"] != "cross_ref":
             continue
-        m = re.match(r'^/?(\d{1,3})\.(\d{1,2}):([A-F])$', s["text"])
-        if not m:
+        parsed = profile.parse_cross_ref(s["text"])
+        if not parsed:
             continue
         cx, cy = _span_center(s["bbox"])
         near_node, best_d = None, 25.0
@@ -628,9 +613,9 @@ def build_page_graph(page, max_link_dist=12.0):
         cross_links.append({
             "from_page": page["page_number"],
             "raw_text": s["text"],
-            "target_sheet": int(m.group(1)),
-            "target_col": int(m.group(2)),
-            "target_zone": m.group(3),
+            "target_sheet": parsed["target_sheet"],
+            "target_col": parsed["target_col"],
+            "target_zone": parsed["target_zone"],
             "near_node_id": near_node,
             "device_pin": device_pin,
         })
@@ -638,11 +623,12 @@ def build_page_graph(page, max_link_dist=12.0):
     return nodes, edges, cross_links
 
 
-def build_graph(classified_pages, max_link_dist=12.0):
+def build_graph(classified_pages, max_link_dist=12.0, profile=None):
+    profile = profile or profiles.DEFAULT_PROFILE
     all_nodes, all_edges, all_cross_links = [], [], []
     offset = 0
     for page in classified_pages:
-        nodes, edges, cross_links = build_page_graph(page, max_link_dist)
+        nodes, edges, cross_links = build_page_graph(page, max_link_dist, profile)
         for n in nodes:
             n["id"] += offset
         for e in edges:
@@ -680,46 +666,19 @@ def build_graph(classified_pages, max_link_dist=12.0):
 # накопления в description, и паттерны штампа написаны на уже
 # декодированной кириллице.
 
-NL_MODULE_RE = re.compile(r'^([A-C]A\d{2})\s*$')
-NL_CHANNEL_RE = re.compile(r'^(DI|AI|DO|AO)\s*(\d{1,2})\s*$')
-NL_KKS_RE = re.compile(r'\b(00[A-Z0-9]{9,11})\b')
-NL_EQ_RE = re.compile(r'\b(\d{1,2}[A-Z]{1,3}\d{1,2})\b')
-
-NL_JUNK_PATTERNS = [
-    re.compile(r'^\d+[.,]?\d*\s*м?м²', re.IGNORECASE),
-    re.compile(r'^\d+[õxх]\d+[xх]\d+'),
-    re.compile(r'^\d{1,4}$'),
-    re.compile(r'^\d+-\d+'),
-    re.compile(r'^/[0-9]+\.[0-9]:[A-F]'),
-    re.compile(r'^[A-Z]{2}\d+:\d+'),
-    re.compile(r'^X[A-Z]\d+'),
-    re.compile(r'^PE$'),
-    re.compile(r'^\d+W\d+$'),
-    re.compile(r'^FB_[A-Z_]+'),
-    re.compile(r'^C_[A-Z_]+'),
-    re.compile(r'КДВВГнг|КДВВГ|LS', re.IGNORECASE),
-    re.compile(r'^[A-C]A\d{2}:[A-B]\d'),
-    re.compile(r'^RB\d{2}:\d+[A-Z]?'),
-    re.compile(r'^RA\d{2}:\d+[A-Z]?'),
-    # штамп/рамка листа -- построчно, ДО накопления в description
-    re.compile(r'^Формат\s+А\d+'),
-    re.compile(r'^Инв\.?\s*N\s*подл'),
-    re.compile(r'^Взам\.?\s*инв'),
-    re.compile(r'^Подп\.?\s*и\s*дата'),
-    re.compile(r'^Лист$'),
-    re.compile(r'^Подп\.?$'),
-    re.compile(r'^№\s*док'),
-    re.compile(r'^Дата$'),
-    re.compile(r'^Изм\.?$'),
-    re.compile(r'^Кол\.?\s*уч'),
-    re.compile(r'^Зам\.?$'),
-    re.compile(r'^ИК\.\d{4}-'),
-    re.compile(r'^Схема\s+соединения\s+модуля'),
-    re.compile(r'^Подключение\s+ПЛК'),
-]
+# Паттерны модуля/канала/тегов/мусора для netlist -- в profiles.py (nl_* поля
+# профиля). PROFILE_A -- старый шаблон (модули [A-C]A\d{2}, KKS "00..."),
+# PROFILE_B -- ОВЕН (МВ210/МУ210). Правьте там, не здесь.
 
 
-def extract_netlist(pdf_path):
+def extract_netlist(pdf_path, profile=None):
+    profile = profile or profiles.DEFAULT_PROFILE
+    nl_module_re = profile.nl_module_re
+    nl_channel_re = profile.nl_channel_re
+    nl_kks_re = profile.nl_kks_re
+    nl_eq_re = profile.nl_eq_re
+    nl_junk_patterns = profile.nl_junk_patterns
+
     doc = fitz.open(pdf_path)
     netlist_dict = {}
     current_module = None
@@ -744,14 +703,14 @@ def extract_netlist(pdf_path):
         for line in lines:
             decoded = fix_text(line) if not re.search(r'[а-яА-ЯёЁ]', line) else line
 
-            mod_match = NL_MODULE_RE.match(decoded)
+            mod_match = nl_module_re.match(decoded)
             if mod_match:
                 finalize(current_key)
                 current_module = mod_match.group(1)
                 current_key = None
                 continue
 
-            chan_match = NL_CHANNEL_RE.match(decoded)
+            chan_match = nl_channel_re.match(decoded)
             if chan_match and current_module:
                 finalize(current_key)
                 channel = chan_match.group(0).replace(' ', '')
@@ -766,13 +725,13 @@ def extract_netlist(pdf_path):
             if not current_key:
                 continue
 
-            if any(jp.search(decoded) for jp in NL_JUNK_PATTERNS):
+            if any(jp.search(decoded) for jp in nl_junk_patterns):
                 continue
             if len(decoded) < 3 and not re.search(r'[а-яА-ЯёЁ]', decoded):
                 continue
 
-            kks_tags = NL_KKS_RE.findall(decoded)
-            eq_tags = [t for t in NL_EQ_RE.findall(decoded) if not re.match(r'^\d+W\d+$', t)]
+            kks_tags = nl_kks_re.findall(decoded)
+            eq_tags = [t for t in nl_eq_re.findall(decoded) if not re.match(r'^\d+W\d+$', t)]
             netlist_dict[current_key]["tags"].extend(kks_tags)
             netlist_dict[current_key]["tags"].extend(eq_tags)
 
@@ -865,10 +824,11 @@ def find_wire_crossings(page, wire_candidates):
     return crossings
 
 
-CONNECTOR_TAG_RE = re.compile(r'^(XA\d{0,3}|XM\d{0,3}|XB\d{0,3}|XT\d{0,3}|XP[AB]\d{0,3})$')
+# Обозначение клеммной колодки для проверки порядка клемм -- в profiles.py
+# (profile.connector_tag_re), свой вариант на каждый шаблон.
 
 
-def check_terminal_order(page, max_pair_dx=60.0, y_tol=3.0):
+def check_terminal_order(page, max_pair_dx=60.0, y_tol=3.0, profile=None):
     """Клеммы одной физической колодки (XA/XM/XB/XT/XP...) должны идти по
     номерам последовательно слева направо. В отличие от первой версии
     (группировка по голой y-полосе листа), здесь номер клеммы сначала
@@ -877,10 +837,12 @@ def check_terminal_order(page, max_pair_dx=60.0, y_tol=3.0):
     паттернами вроде "9 18 27 36" у многоканальных DI/DO-модулей
     (там это не порядковые номера клемм одной рейки, а номера жил в
     разных группах кабеля, они закономерно повторяются)."""
+    profile = profile or profiles.DEFAULT_PROFILE
+    connector_tag_re = profile.connector_tag_re
     spans = page["text_spans"]
     anchors = [s for s in spans
                if s.get("entity_type") == "device_tag"
-               and CONNECTOR_TAG_RE.match(s["text"].strip())]
+               and connector_tag_re.match(s["text"].strip())]
     terms = [s for s in spans if s.get("entity_type") in ("terminal_no", "pin_ref")]
 
     groups = defaultdict(list)  # (тег_разъёма, номер_строки_по_y) -> [(x, текст)]
@@ -948,7 +910,8 @@ def check_wire_gauge_vs_width(page, wire_candidates, max_dist=8.0):
     return results
 
 
-def build_issue_candidates(classified_pages):
+def build_issue_candidates(classified_pages, profile=None):
+    profile = profile or profiles.DEFAULT_PROFILE
     all_crossings, all_terminal_anomalies, all_gauge_checks = [], [], []
     for page in classified_pages:
         wire_candidates, _ = _filter_wire_candidates(
@@ -957,13 +920,14 @@ def build_issue_candidates(classified_pages):
         crossings = find_wire_crossings(page, wire_candidates)
         all_crossings.extend(crossings)
 
-        all_terminal_anomalies.extend(check_terminal_order(page))
+        term_anomalies = check_terminal_order(page, profile=profile)
+        all_terminal_anomalies.extend(term_anomalies)
         all_gauge_checks.extend(check_wire_gauge_vs_width(page, wire_candidates))
 
         print(f"  [issues] page {page['page_number']}: "
               f"{len(crossings)} crossings "
               f"({sum(1 for c in crossings if c['has_junction_dot'])} with dot), "
-              f"{len(check_terminal_order(page))} terminal-order anomalies",
+              f"{len(term_anomalies)} terminal-order anomalies",
               file=sys.stderr)
 
     crossings_no_dot = [c for c in all_crossings if not c["has_junction_dot"]]
@@ -1002,31 +966,34 @@ def extract_to_dir(pdf_path, out_dir):
     os.makedirs(out_dir, exist_ok=True)
 
     raw_pages, font_fix_map = extract_raw(pdf_path)
+    profile = profiles.detect_profile(raw_pages, font_fix_map)
     with open(os.path.join(out_dir, "raw.json"), "w", encoding="utf-8") as f:
-        json.dump({"font_fix_map": font_fix_map, "pages": raw_pages},
+        json.dump({"profile": profile.name, "font_fix_map": font_fix_map,
+                   "pages": raw_pages},
                   f, ensure_ascii=False, indent=1)
 
-    raw_pages = merge_split_tags(raw_pages)
+    raw_pages = merge_split_tags(raw_pages, profile)
 
-    classified_pages = classify_pages(raw_pages)
+    classified_pages = classify_pages(raw_pages, profile)
     with open(os.path.join(out_dir, "classified.json"), "w", encoding="utf-8") as f:
         json.dump(classified_pages, f, ensure_ascii=False, indent=1)
 
-    graph = build_graph(classified_pages)
+    graph = build_graph(classified_pages, profile=profile)
     with open(os.path.join(out_dir, "graph.json"), "w", encoding="utf-8") as f:
         json.dump(graph, f, ensure_ascii=False, indent=1)
 
-    netlist = extract_netlist(pdf_path)
+    netlist = extract_netlist(pdf_path, profile)
     with open(os.path.join(out_dir, "netlist.json"), "w", encoding="utf-8") as f:
         json.dump(netlist, f, ensure_ascii=False, indent=1)
 
-    issues = build_issue_candidates(classified_pages)
+    issues = build_issue_candidates(classified_pages, profile)
     with open(os.path.join(out_dir, "issues_candidates.json"), "w", encoding="utf-8") as f:
         json.dump(issues, f, ensure_ascii=False, indent=1)
 
     files = ["raw.json", "classified.json", "graph.json",
              "netlist.json", "issues_candidates.json"]
     summary = {
+        "profile": profile.name,
         "total_pages": len(raw_pages),
         "graph_nodes": graph["summary"]["total_nodes"],
         "graph_edges": graph["summary"]["total_edges"],
@@ -1049,31 +1016,33 @@ def main():
 
     print("=== 1/4: сырое извлечение текста и линий из PDF ===", file=sys.stderr)
     raw_pages, font_fix_map = extract_raw(pdf_path)
+    profile = profiles.detect_profile(raw_pages, font_fix_map)
     with open(os.path.join(out_dir, "raw.json"), "w", encoding="utf-8") as f:
-        json.dump({"font_fix_map": font_fix_map, "pages": raw_pages},
+        json.dump({"profile": profile.name, "font_fix_map": font_fix_map,
+                   "pages": raw_pages},
                    f, ensure_ascii=False, indent=1)
 
     print("=== 1.5/4: склейка разбитых тегов (напр. 'XM'+'9' -> 'XM9') ===", file=sys.stderr)
-    raw_pages = merge_split_tags(raw_pages)
+    raw_pages = merge_split_tags(raw_pages, profile)
 
     print("=== 2/4: классификация текстовых span'ов ===", file=sys.stderr)
-    classified_pages = classify_pages(raw_pages)
+    classified_pages = classify_pages(raw_pages, profile)
     with open(os.path.join(out_dir, "classified.json"), "w", encoding="utf-8") as f:
         json.dump(classified_pages, f, ensure_ascii=False, indent=1)
 
     print("=== 3/4: построение графа связей ===", file=sys.stderr)
-    graph = build_graph(classified_pages)
+    graph = build_graph(classified_pages, profile=profile)
     with open(os.path.join(out_dir, "graph.json"), "w", encoding="utf-8") as f:
         json.dump(graph, f, ensure_ascii=False, indent=1)
 
     print("=== 4/5: netlist по каналам ввода/вывода ===", file=sys.stderr)
-    netlist = extract_netlist(pdf_path)
+    netlist = extract_netlist(pdf_path, profile)
     with open(os.path.join(out_dir, "netlist.json"), "w", encoding="utf-8") as f:
         json.dump(netlist, f, ensure_ascii=False, indent=1)
 
     print("=== 5/5: геометрические кандидаты (точки соединения, порядок клемм, "
           "сечение vs толщина линии) ===", file=sys.stderr)
-    issues = build_issue_candidates(classified_pages)
+    issues = build_issue_candidates(classified_pages, profile)
     with open(os.path.join(out_dir, "issues_candidates.json"), "w", encoding="utf-8") as f:
         json.dump(issues, f, ensure_ascii=False, indent=1)
 

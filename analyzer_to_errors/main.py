@@ -162,14 +162,38 @@ def format_extraction_report(manifest: dict) -> str:
     return "\n".join(lines)
 
 
+def load_type_overrides(cfg: dict) -> dict:
+    """Пометки типа документа, выставленные пользователем в веб-интерфейсе.
+
+    Лежат в data/.doc_types.json (пишет web_app/server.py при выборе типа в
+    списке файлов). Читаем их и здесь, чтобы CLI и сайт видели одно и то же:
+    иначе `python main.py` игнорировал бы типы, заданные в интерфейсе, и падал
+    на файлах без пометки в имени.
+    """
+    path = resolve_path(cfg["paths"]["input_dir"]) / ".doc_types.json"
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
 def run_extraction_stage(cfg: dict, doc_types: dict = None) -> dict:
-    """Стадия 0: PDF -> data/<имя документа>/*.json + data/manifest.json."""
+    """Стадия 0: PDF -> data/<имя документа>/*.json + data/manifest.json.
+
+    Тип документа берётся (по убыванию приоритета): из doc_types (передан явно,
+    например с формы загрузки) -> из data/.doc_types.json -> из пометки в имени
+    файла ("(scheme)...", "(netlist)...").
+    """
     paths = cfg["paths"]
+    overrides = doc_types or load_type_overrides(cfg)
     return run_extraction(
         base_files_dir=resolve_path(paths["base_files_dir"]),
         scripts_dir=resolve_path(paths["scripts_dir"]),
         data_dir=resolve_path(paths["input_dir"]),
-        overrides=doc_types,
+        overrides=overrides,
         overwrite=not cfg.get("extraction", {}).get("reuse_existing", False),
     )
 

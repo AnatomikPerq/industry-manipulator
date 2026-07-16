@@ -30,6 +30,7 @@ import argparse
 import cgi
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -46,6 +47,7 @@ PROJECT_ROOT = HERE.parent
 ANALYZER_DIR = PROJECT_ROOT / "analyzer_to_errors"
 STATIC_DIR = HERE / "static"
 RUNNER_SCRIPT = HERE / "_pipeline_runner.py"
+STORY_DIR = PROJECT_ROOT / "story"
 
 # Пайплайн лежит рядом, в analyzer_to_errors - добавляем его в путь импорта.
 # (нужен и здесь: конфиг, пути, resolve_path - используются напрямую, не только
@@ -218,6 +220,38 @@ def _clear_type_overrides(cfg):
 
 
 # =====================================================================
+# Архив истории анализов: story/<имя первого файла>/<дата-время>/
+# =====================================================================
+
+def _sanitize_story_name(filename):
+    stem = Path(filename).stem
+    return re.sub(r'[\\/:*?"<>|]', "_", stem).strip() or "без_имени"
+
+
+def _archive_run(types, started_at):
+    """Копирует результаты завершённого прогона (и объединённый merged_report.json,
+    и необъединённые report_1.json/report_2.json) в story/ - постоянный архив
+    истории анализов, отдельный от output/, который каждый следующий запуск чистит.
+    Папка: story/<имя первого файла анализа>/<дата-время анализа>/."""
+    cfg = pipeline.load_config(_config_path())
+    out_dir = pipeline.resolve_path(cfg["paths"]["output_dir"])
+    if not out_dir.is_dir():
+        return
+    files = [p for p in out_dir.iterdir() if p.is_file()]
+    if not files:
+        return
+
+    first_file = next(iter(types), None) if types else None
+    folder_name = _sanitize_story_name(first_file) if first_file else "без_файла"
+    stamp = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime(started_at))
+    dest = STORY_DIR / folder_name / stamp
+    dest.mkdir(parents=True, exist_ok=True)
+    for f in files:
+        shutil.copy2(f, dest / f.name)
+    STATE.add_log(f"=== Результаты сохранены в историю: story/{folder_name}/{stamp}/ ===")
+
+
+# =====================================================================
 # Запуск анализа в фоне (отдельным процессом - см. docstring модуля)
 # =====================================================================
 
@@ -244,6 +278,7 @@ def _run_analysis(mode, types):
     Пайплайн запускается подпроцессом _pipeline_runner.py, а не вызывается
     напрямую в этом потоке - только так /api/cancel может оборвать его мгновенно
     (см. _kill_process_tree), убив процесс целиком, а не дожидаясь кооперации."""
+    started_at = time.time()
     args = {
         "config_path": _config_path(),
         "doc_types": types or None,
@@ -300,6 +335,11 @@ def _run_analysis(mode, types):
         STATE.add_log("=== Частичные результаты отменённого прогона очищены ===")
         STATE.finish(cancelled=True, error="Анализ отменён пользователем")
         return
+
+    try:
+        _archive_run(types, started_at)
+    except Exception as e:  # noqa: BLE001 - архив не должен ронять сам анализ
+        STATE.add_log(f"!!! Не удалось сохранить результаты в историю: {e}")
 
     if result is not None and result.get("ok"):
         n = result.get("n_findings")

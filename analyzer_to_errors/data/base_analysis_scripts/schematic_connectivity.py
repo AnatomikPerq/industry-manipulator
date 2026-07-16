@@ -334,14 +334,15 @@ def collect_net_markings(net_lines, marking_spans):
 CROSS_REF_RE = re.compile(r'^/?(\d{1,3})\.(\d{1,2}):([A-F])$')
 
 
-def page_cross_refs(page, nets_geom, spans):
+def page_cross_refs(page, nets_geom, spans, profile=None):
     """Межлистовые ссылки листа + к какой цепи каждая относится."""
+    profile = profile or _base.profiles.DEFAULT_PROFILE
     refs = []
     for s in spans:
         if s.get("entity_type") != "cross_ref":
             continue
-        m = CROSS_REF_RE.match(s["text"])
-        if not m:
+        parsed = profile.parse_cross_ref(s["text"])
+        if not parsed:
             continue
         cx, cy = _span_center(s["bbox"])
         # ближайшая цепь: ссылка подписана у конца провода, уходящего на другой лист
@@ -353,9 +354,9 @@ def page_cross_refs(page, nets_geom, spans):
                     best_d, best_net = d, net_idx
         refs.append({
             "raw_text": s["text"],
-            "target_sheet": int(m.group(1)),
-            "target_column": int(m.group(2)),
-            "target_zone": m.group(3),
+            "target_sheet": parsed["target_sheet"],
+            "target_column": parsed["target_col"],
+            "target_zone": parsed["target_zone"],
             "net_index": best_net,
             "dist_to_net": round(best_d, 2) if best_net is not None else None,
         })
@@ -367,9 +368,10 @@ def page_cross_refs(page, nets_geom, spans):
 # ============================================================
 
 def build_connectivity(pdf_path):
-    raw_pages, _ = _base.extract_raw(pdf_path)
-    raw_pages = _base.merge_split_tags(raw_pages)
-    pages = _base.classify_pages(raw_pages)
+    raw_pages, font_fix_map = _base.extract_raw(pdf_path)
+    profile = _base.profiles.detect_profile(raw_pages, font_fix_map)
+    raw_pages = _base.merge_split_tags(raw_pages, profile)
+    pages = _base.classify_pages(raw_pages, profile)
 
     all_nets = []
     all_cross_refs = []
@@ -390,6 +392,14 @@ def build_connectivity(pdf_path):
         marking_spans = [{"x": r["x"], "y": r["y"], "text": r["pin"]}
                          for r in pin_records
                          if not r["device"] and not r["kks"] and r["pin"].isdigit()]
+        # Если профиль умеет опознавать маркировку цепи ЯВНО (профиль D:
+        # "13N1", "50C3", "A411" -- линия+фаза+сегмент), берём её напрямую:
+        # эвристика "голое число без владельца" такие метки не находит вовсе,
+        # а именно они -- ключ для сверки с таблицей подключений.
+        marking_spans += [{"x": _span_center(s["bbox"])[0],
+                           "y": _span_center(s["bbox"])[1],
+                           "text": s["text"].strip()}
+                          for s in spans if s.get("entity_type") == "wire_marking"]
 
         nets_geom = []
         page_nets = []
@@ -423,7 +433,7 @@ def build_connectivity(pdf_path):
             })
             nets_geom.append((net_id, net["free_ends"]))
 
-        refs = page_cross_refs(page, nets_geom, spans)
+        refs = page_cross_refs(page, nets_geom, spans, profile)
         for r in refs:
             r["from_sheet"] = page_num
         all_cross_refs.extend(refs)
@@ -435,7 +445,10 @@ def build_connectivity(pdf_path):
 
     total_sheets = len(pages)
     for r in all_cross_refs:
-        r["target_sheet_exists"] = 1 <= r["target_sheet"] <= total_sheets
+        # target_sheet=None -- ссылка в пределах того же листа (формат Delta "(:3D)"):
+        # целевой лист заведомо существует, это не битая ссылка.
+        r["target_sheet_exists"] = (r["target_sheet"] is None
+                                    or 1 <= r["target_sheet"] <= total_sheets)
 
     return all_nets, all_cross_refs, total_sheets, total_t
 
