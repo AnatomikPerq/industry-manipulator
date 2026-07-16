@@ -251,22 +251,6 @@ class LLMUnavailableError(RuntimeError):
     """Сервер ИИ недоступен - полный анализ (с агентами) невозможен."""
 
 
-class PipelineCancelled(RuntimeError):
-    """Анализ отменён пользователем. Поднимается на ближайшей границе стадии,
-    когда переданный в run_pipeline callback should_cancel() вернул True."""
-
-
-def _check_cancel(should_cancel) -> None:
-    """Проверка запроса на отмену между стадиями пайплайна.
-
-    Питоновский поток нельзя убить извне, поэтому отмена кооперативная: пайплайн
-    сам сверяется с этим флагом на границах стадий. Внутри долгой стадии (работа
-    ИИ-агента) отмена сработает не мгновенно, а по её завершении - зато без риска
-    оставить данные в разорванном состоянии."""
-    if should_cancel is not None and should_cancel():
-        raise PipelineCancelled("Анализ отменён пользователем")
-
-
 def preflight_llm(cfg: dict) -> None:
     """Быстрая проверка доступности серверов ИИ ПЕРЕД запуском агентов.
 
@@ -330,8 +314,7 @@ def clear_previous_results(cfg: dict) -> None:
 def run_pipeline(input_dir: str = None, known_errors_path: str = None,
                  output_dir: str = None, config_path: str = None,
                  doc_types: dict = None, skip_extract: bool = False,
-                 skip_agents: bool = False, clear_previous: bool = False,
-                 should_cancel=None) -> dict:
+                 skip_agents: bool = False, clear_previous: bool = False) -> dict:
     """Главная точка входа для использования из другого скрипта (без CLI).
 
     doc_types: {"имя файла.pdf": "scheme"|"netlist"} - явная пометка типа
@@ -342,9 +325,6 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
     skip_agents: НЕ запускать LLM-агентов и мерджер - отчёт собирается только из
         находок детерминированного чекера (режим "без ИИ, только скрипты").
     clear_previous: стереть результаты прошлого анализа перед запуском.
-    should_cancel: callable без аргументов -> bool. Если между стадиями он
-        вернёт True, пайплайн прервётся с PipelineCancelled. Отмена
-        кооперативная (см. _check_cancel): внутри долгой стадии не прерывает.
 
     Возвращает итоговый merged-отчёт (dict с ключами 'errors' и 'summary').
     Бросает ingest.ExtractionError, если не удалось извлечь ни один документ,
@@ -354,7 +334,6 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
     """
     cfg = load_config(config_path or str(PROJECT_ROOT / "config.yaml"))
 
-    _check_cancel(should_cancel)
     if clear_previous:
         clear_previous_results(cfg)
 
@@ -373,7 +352,6 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
                     manifest["summary"]["extracted_ok"],
                     manifest["summary"]["total_documents"])
 
-    _check_cancel(should_cancel)
     known_errors = load_known_errors(known_errors_path)
     logger.info("Загружено %d заранее известных ошибок из %s",
                 len(known_errors), known_errors_path)
@@ -396,7 +374,6 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
         logger.info("Итоговый отчёт сохранён: %s", merged_path)
         return merged
 
-    _check_cancel(should_cancel)
     # Перед запуском агентов проверяем, что серверы ИИ вообще доступны -
     # иначе сразу понятная ошибка в консоль, а не зависание на минуты.
     preflight_llm(cfg)
@@ -415,7 +392,6 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
                                   helper_dir=str(helper_dir),
                                   max_json_repair_attempts=max_repair, **limits)
 
-    _check_cancel(should_cancel)
     logger.info("Запуск агента анализа №2 (%s)", cfg["llm_servers"]["agent_2"]["model"])
     report_2 = run_analysis_agent(cfg["llm_servers"]["agent_2"], str(data_dir),
                                   helper_dir=str(helper_dir),
@@ -427,7 +403,6 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
         (out_dir / "report_2.json").write_text(
             json.dumps(report_2, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    _check_cancel(should_cancel)
     logger.info("Слияние отчётов моделью-сшивателем")
     merger_cfg = resolve_merger_cfg(cfg)
     merged = merge_reports(merger_cfg, report_1, report_2, known_errors,

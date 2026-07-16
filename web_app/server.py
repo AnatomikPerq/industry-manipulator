@@ -3,9 +3,11 @@
 Локальный веб-интерфейс анализатора EPLAN-схем.
 
 Бэкенд на стандартной библиотеке Python (http.server) - без внешних зависимостей,
-работает офлайн. Пайплайн питоновский, поэтому интерфейс напрямую вызывает функции
-из analyzer_to_errors (run_pipeline, run_rules_stage, run_checks) и на лету
-захватывает их лог в консоль - это надёжнее, чем гонять пайплайн подпроцессом.
+работает офлайн. Сам анализ (analyzer_to_errors/main.py:run_pipeline) запускается
+ОТДЕЛЬНЫМ ПОДПРОЦЕССОМ (_pipeline_runner.py), а не в потоке текущего процесса -
+только так кнопка «Отменить анализ» может оборвать его мгновенно и гарантированно,
+убив весь этот процесс и его потомков (эквивалент Ctrl+C во всех его окнах разом),
+а не ждать, пока пайплайн сам заметит запрос на отмену где-то на границе стадии.
 
 Запуск:
     python web_app/server.py            # http://localhost:8000
@@ -18,7 +20,7 @@
     POST /api/upload           - загрузка файлов (multipart) -> base_files
     GET  /api/files            - что сейчас лежит в base_files
     POST /api/analyze          - запустить анализ {mode, types}
-    POST /api/cancel           - отменить текущий анализ (кооперативно)
+    POST /api/cancel           - мгновенно оборвать текущий анализ (kill процесса)
     GET  /api/status           - статус текущего анализа + консоль (лог)
     GET  /api/report           - последний merged_report.json
     GET  /api/check-llm        - какие модели ИИ загружены/доступны на сервере
@@ -27,9 +29,11 @@
 import argparse
 import cgi
 import json
-import logging
+import os
 import shutil
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -41,8 +45,11 @@ HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
 ANALYZER_DIR = PROJECT_ROOT / "analyzer_to_errors"
 STATIC_DIR = HERE / "static"
+RUNNER_SCRIPT = HERE / "_pipeline_runner.py"
 
 # Пайплайн лежит рядом, в analyzer_to_errors - добавляем его в путь импорта.
+# (нужен и здесь: конфиг, пути, resolve_path - используются напрямую, не только
+# подпроцессом-раннером)
 sys.path.insert(0, str(ANALYZER_DIR))
 
 import main as pipeline          # noqa: E402
@@ -72,14 +79,13 @@ class AnalysisState:
         self.running = False
         self.stage = "idle"          # idle | running | done | error | cancelled
         self.mode = None             # scripts | full
-        self.log = deque(maxlen=5000)  # строки консоли
+        self.log = deque(maxlen=5000)  # строки консоли (переживает отмену - не чистится)
         self.error = None
         self.started_at = None
         self.finished_at = None
         self.n_findings = None
-        # Флаг запроса на отмену. Пайплайн сверяется с ним на границах стадий
-        # (см. main._check_cancel) - поток нельзя убить принудительно.
         self.cancel_requested = False
+        self.proc = None             # subprocess.Popen текущего прогона пайплайна
 
     def reset(self, mode):
         with self.lock:
@@ -92,19 +98,26 @@ class AnalysisState:
             self.finished_at = None
             self.n_findings = None
             self.cancel_requested = False
+            self.proc = None
 
     def add_log(self, line):
         with self.lock:
             self.log.append(line)
 
+    def set_proc(self, proc):
+        with self.lock:
+            self.proc = proc
+
     def request_cancel(self):
-        """Помечает текущий анализ на отмену. Возвращает True, если анализ
-        действительно шёл (было что отменять)."""
+        """Помечает анализ на отмену. Возвращает (proc, already_requested,
+        was_running): proc - текущий подпроцесс (может быть None, если ещё не
+        успел стартовать), was_running - было ли вообще что отменять."""
         with self.lock:
             if not self.running:
-                return False
+                return None, False, False
+            already = self.cancel_requested
             self.cancel_requested = True
-            return True
+            return self.proc, already, True
 
     def is_cancel_requested(self):
         with self.lock:
@@ -117,6 +130,7 @@ class AnalysisState:
             self.error = error
             self.finished_at = time.time()
             self.n_findings = n_findings
+            self.proc = None
 
     def snapshot(self):
         with self.lock:
@@ -136,14 +150,23 @@ class AnalysisState:
 STATE = AnalysisState()
 
 
-class StateLogHandler(logging.Handler):
-    """Пишет записи логгера пайплайна в консоль текущего анализа."""
-    def emit(self, record):
-        try:
-            msg = self.format(record)
-        except Exception:  # noqa: BLE001
-            msg = record.getMessage()
-        STATE.add_log(msg)
+def _kill_process_tree(proc):
+    """Мгновенно и гарантированно убивает подпроцесс анализа вместе со всеми его
+    потомками - как если бы во всех его окнах разом нажали Ctrl+C, только без
+    надежды на то, что код внутри вообще заметит сигнал (сетевой вызов к ИИ или
+    Open Interpreter кооперативную отмену вполне могут проигнорировать)."""
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        if sys.platform == "win32":
+            # /T - вместе со всем деревом потомков, /F - принудительно, без вопросов
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=15)
+        else:
+            import signal
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _config_path():
@@ -195,50 +218,105 @@ def _clear_type_overrides(cfg):
 
 
 # =====================================================================
-# Запуск анализа в фоне
+# Запуск анализа в фоне (отдельным процессом - см. docstring модуля)
 # =====================================================================
 
+def _cleanup_after_cancel(cfg):
+    """После жёсткой отмены подчищает только результаты незавершённого прогона:
+    output/ (частично сформированные report_*.json / merged_report.json) и
+    рабочую папку агента (your_helping_scripts_and_files). Файлы пользователя
+    (base_files), уже извлечённые данные документов и скрипты-парсеры не трогаем -
+    работа над ними была завершена корректно и пригодится на следующем запуске."""
+    for key in ("output_dir", "helper_scripts_dir"):
+        d = pipeline.resolve_path(cfg["paths"][key])
+        if not d.exists():
+            continue
+        for item in d.iterdir():
+            try:
+                item.unlink() if item.is_file() else shutil.rmtree(item)
+            except OSError:
+                pass  # файл на миг остался занят ОС после kill - не критично
+
+
 def _run_analysis(mode, types):
-    """Фоновый прогон. mode: 'scripts' (без ИИ) | 'full' (со всеми стадиями)."""
-    handler = StateLogHandler()
-    handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s",
-                                            datefmt="%H:%M:%S"))
-    root = logging.getLogger()
-    prev_level = root.level
-    root.setLevel(logging.INFO)
-    root.addHandler(handler)
+    """Фоновый прогон. mode: 'scripts' (без ИИ) | 'full' (со всеми стадиями).
+
+    Пайплайн запускается подпроцессом _pipeline_runner.py, а не вызывается
+    напрямую в этом потоке - только так /api/cancel может оборвать его мгновенно
+    (см. _kill_process_tree), убив процесс целиком, а не дожидаясь кооперации."""
+    args = {
+        "config_path": _config_path(),
+        "doc_types": types or None,
+        "skip_agents": (mode == "scripts"),
+        "clear_previous": True,
+    }
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ia_run_"))
+    args_path = tmp_dir / "args.json"
+    result_path = tmp_dir / "args.json.result.json"
+    args_path.write_text(json.dumps(args, ensure_ascii=False), encoding="utf-8")
+
+    STATE.add_log(f"=== Запуск анализа: режим '{mode}' ===")
+
+    popen_kwargs = dict(
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", errors="replace",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"},
+    )
+    if sys.platform == "win32":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
 
     try:
-        STATE.add_log(f"=== Запуск анализа: режим '{mode}' ===")
-        merged = pipeline.run_pipeline(
-            config_path=_config_path(),
-            doc_types=types or None,
-            skip_agents=(mode == "scripts"),
-            clear_previous=True,
-            should_cancel=STATE.is_cancel_requested,
-        )
-        n = len(merged.get("errors", []))
+        proc = subprocess.Popen(
+            [sys.executable, "-u", str(RUNNER_SCRIPT), str(args_path)], **popen_kwargs)
+    except OSError as e:
+        STATE.add_log(f"!!! Не удалось запустить процесс анализа: {e}")
+        STATE.finish(error=str(e))
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return
+
+    STATE.set_proc(proc)
+    if STATE.is_cancel_requested():  # отмена успела прийти в узкую щель до старта
+        _kill_process_tree(proc)
+
+    for line in proc.stdout:
+        STATE.add_log(line.rstrip("\n"))
+    proc.wait()
+
+    cancelled = STATE.is_cancel_requested()
+    result = None
+    if result_path.exists():
+        try:
+            result = json.loads(result_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            result = None
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    if cancelled:
+        STATE.add_log("=== Анализ остановлен пользователем ===")
+        cfg = pipeline.load_config(_config_path())
+        _cleanup_after_cancel(cfg)
+        STATE.add_log("=== Частичные результаты отменённого прогона очищены ===")
+        STATE.finish(cancelled=True, error="Анализ отменён пользователем")
+        return
+
+    if result is not None and result.get("ok"):
+        n = result.get("n_findings")
         STATE.add_log(f"=== Готово. Найдено замечаний: {n} ===")
         STATE.finish(n_findings=n)
-    except pipeline.PipelineCancelled as e:
-        # штатная отмена по запросу пользователя - без traceback
-        STATE.add_log("=== Анализ отменён пользователем ===")
-        STATE.finish(cancelled=True, error=str(e))
-    except pipeline.LLMUnavailableError as e:
-        # ожидаемая понятная ошибка - без traceback
-        STATE.add_log("!!! " + str(e))
-        STATE.finish(error=str(e))
-    except pipeline.ExtractionError as e:
-        STATE.add_log("!!! Ошибка извлечения: " + str(e))
-        STATE.finish(error=str(e))
-    except Exception as e:  # noqa: BLE001
-        import traceback
-        STATE.add_log("!!! ОШИБКА: " + str(e))
-        STATE.add_log(traceback.format_exc())
-        STATE.finish(error=str(e))
-    finally:
-        root.removeHandler(handler)
-        root.setLevel(prev_level)
+        return
+
+    if result is not None and not result.get("ok"):
+        err = result.get("error") or "неизвестная ошибка"
+        STATE.add_log("!!! " + err)
+        STATE.finish(error=err)
+        return
+
+    # процесс завершился, не оставив result.json - упал неожиданно
+    err = f"процесс анализа неожиданно завершился (код {proc.returncode})"
+    STATE.add_log("!!! " + err)
+    STATE.finish(error=err)
 
 
 # =====================================================================
@@ -497,16 +575,18 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"started": True, "mode": mode})
 
     def _api_cancel(self):
-        """Запрос на отмену текущего анализа. Отмена кооперативная: пайплайн
-        остановится на ближайшей границе стадии, не мгновенно. Внутри работы
-        ИИ-агента это может занять до нескольких минут - об этом сообщаем."""
-        if not STATE.running:
+        """Мгновенная отмена: убивает подпроцесс анализа целиком, вместе со всем
+        деревом потомков (см. _kill_process_tree) - эквивалент Ctrl+C во всех его
+        окнах разом, только гарантированный. Консоль не чистится - в неё лишь
+        дописывается отметка об отмене. Частичные результаты прогона (output/,
+        рабочая папка агента) подчистит фоновый поток _run_analysis, как только
+        подтвердит, что процесс действительно завершился."""
+        proc, already, was_running = STATE.request_cancel()
+        if not was_running:
             return self._send_json({"error": "Сейчас анализ не выполняется"}, 409)
-        already = STATE.is_cancel_requested()
-        STATE.request_cancel()
         if not already:
-            STATE.add_log("=== Запрошена отмена анализа, останавливаемся "
-                          "на ближайшей стадии… ===")
+            STATE.add_log("=== Отмена запрошена: останавливаем процесс анализа немедленно ===")
+        _kill_process_tree(proc)
         self._send_json({"cancelling": True})
 
     def _api_report(self):

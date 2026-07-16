@@ -203,7 +203,7 @@ function resumePolling(startLen) {
     }
 
     if (s.running) {
-      const note = s.cancel_requested ? " — отменяем, ждём завершения стадии…" : "";
+      const note = s.cancel_requested ? " — останавливаем…" : "";
       setStatus(`Идёт анализ… (режим: ${s.mode === "scripts" ? "без ИИ" : "полный"})${note}`, true);
     } else {
       clearInterval(statusTimer);
@@ -222,12 +222,12 @@ function resumePolling(startLen) {
   }, 1000);
 }
 
-// Отмена анализа. Кооперативная: сервер прервёт пайплайн на ближайшей границе
-// стадии, поэтому кнопку блокируем и ждём, пока опрос статуса увидит остановку.
+// Отмена анализа. Сервер убивает процесс пайплайна мгновенно (весь процесс
+// целиком, со всеми потомками) - кнопку блокируем лишь на время самого запроса.
 async function cancelAnalysis() {
   const btn = $("cancel-btn");
   btn.disabled = true;
-  btn.textContent = "Отмена запрошена…";
+  btn.textContent = "Останавливаем…";
   logLine("--- Запрошена отмена анализа ---", "warn");
   try {
     await fetchJSON("/api/cancel", { method: "POST" });
