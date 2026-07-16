@@ -24,4 +24,4 @@ venv/
 !/analyzer_to_errors/data/your_helping_scripts_and_files/.gitkeep
 
 # История анализов
-/story/
+/story/*/
