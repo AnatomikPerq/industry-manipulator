@@ -210,11 +210,17 @@ def _finding_signature(finding: dict) -> tuple:
 
 
 def run_rules_stage(cfg: dict, data_dir: Path) -> list:
-    """Стадия правил: детерминированный чекер по таблицам подключений (нетлистам).
+    """Стадия правил: детерминированные чекеры по КАЖДОМУ типу документа.
 
-    Читает manifest.json, находит документы типа netlist и прогоняет по их
-    connections.json правила из netlist_rules. Возвращает список находок в том же
-    формате schema.REPORT_SCHEMA, что и у агентов. LLM здесь не участвует.
+    Читает manifest.json и прогоняет по каждому документу чекер его типа:
+      netlist -> netlist_rules.check_connections_file (connections.json)
+      scheme  -> schematic_rules.check_schematic_file (nets.json)
+    Возвращает находки в формате schema.REPORT_SCHEMA - том же, что у агентов.
+    LLM здесь не участвует.
+
+    Раньше здесь стоял фильтр `if doc_type != "netlist": continue`, из-за которого
+    схемы не проверялись вообще: анализ комплекта из одних схем всегда давал ноль
+    замечаний независимо от содержимого.
     """
     manifest_path = data_dir / "manifest.json"
     if not manifest_path.exists():
@@ -222,18 +228,38 @@ def run_rules_stage(cfg: dict, data_dir: Path) -> list:
         return []
 
     scripts_dir = resolve_path(cfg["paths"]["scripts_dir"])
-    rules = _load_parser_module(scripts_dir, "netlist_rules.py")
+
+    # чекер на тип документа: (скрипт, функция, файл с данными)
+    checkers = {
+        "netlist": ("netlist_rules.py", "check_connections_file", "connections.json"),
+        "scheme": ("schematic_rules.py", "check_schematic_file", "nets.json"),
+    }
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     findings = []
     for doc in manifest.get("documents", []):
-        if doc.get("doc_type") != "netlist":
+        checker = checkers.get(doc.get("doc_type"))
+        if checker is None:
+            logger.info("  правила для типа %r не заданы, документ %s пропущен",
+                        doc.get("doc_type"), doc.get("name"))
             continue
-        conn_path = PROJECT_ROOT / doc["data_dir"] / "connections.json"
-        if not conn_path.exists():
+        script, func_name, data_file = checker
+
+        data_path = PROJECT_ROOT / doc["data_dir"] / data_file
+        if not data_path.exists():
+            logger.warning("  %s: нет файла %s - правила не применены",
+                           doc["name"], data_file)
             continue
-        doc_findings = rules.check_connections_file(doc["name"], str(conn_path))
-        logger.info("  правила по %s: %d находок", doc["name"], len(doc_findings))
+
+        try:
+            module = _load_parser_module(scripts_dir, script)
+            doc_findings = getattr(module, func_name)(doc["name"], str(data_path))
+        except Exception as e:  # noqa: BLE001 - падение чекера не должно ронять прогон
+            logger.error("  %s: чекер %s упал: %s", doc["name"], script, e)
+            continue
+
+        logger.info("  правила по %s (%s): %d находок",
+                    doc["name"], doc["doc_type"], len(doc_findings))
         findings.extend(doc_findings)
     return findings
 
