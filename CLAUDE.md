@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Repository
+
+`origin` is `https://github.com/AnatomikPerq/industry-manipulator.git` — this is the main
+repository for this project. Commits made locally are expected to be pushed there (`git push
+origin main`) unless the user says otherwise for a specific commit.
+
 ## What this is
 
 "Индустрия манипулятор" — офлайн анализатор проектной документации: находит ошибки
