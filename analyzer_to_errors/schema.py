@@ -14,22 +14,30 @@
 --------------------------------------------------------------------
 Находки бывают ДВУХ РОДОВ, и обе ложатся в один и тот же список errors[]:
 
-1. scope = "cross_document" - несостыковка МЕЖДУ документами: строка таблицы
-   подключений (netlist) против того, что нарисовано на схеме (scheme).
-   У такой находки ДВА ref'а: один на netlist, другой на scheme. Именно они
-   рисуют в таблице пользователя левую группу колонок ("Таблица подключений")
-   и правую ("Монтажная документация").
+1. scope = "cross_document" - несостыковка МЕЖДУ документами. Два случая:
+   а) таблица подключений (netlist) против схемы (scheme) - У такой находки
+      ДВА ref'а: первый netlist, второй scheme. Именно они рисуют в таблице
+      пользователя левую группу колонок ("Таблица подключений") и правую
+      ("Монтажная документация").
+   б) СВЯЗКА документов одного шкафа: принципиальная схема (scheme, Э3),
+      сборочный чертёж (assembly, СБ) и спецификация (spec, СО). Здесь у
+      находки может быть ДО ТРЁХ ref'ов - по одному на документ, в котором
+      элемент присутствует (или отсутствует). Сопоставление идёт по
+      ПОЗИЦИОННОМУ ОБОЗНАЧЕНИЮ элемента (designator): '1QF1', 'DO1', 'G1'.
 
 2. scope = "single_document" - ошибка ВНУТРИ одного документа: дубль
    физического адреса клеммы, обрыв межлистовой ссылки, битый KKS-тег,
-   канал модуля без описания сигнала и т.п. У такой находки один ref
-   (или два ref'а на ОДИН И ТОТ ЖЕ документ - например, две строки, которые
-   дублируют друг друга). Правая группа колонок в таблице остаётся пустой.
+   канал модуля без описания сигнала, #REF! в ячейке спецификации и т.п.
+   У такой находки один ref (или два ref'а на ОДИН И ТОТ ЖЕ документ -
+   например, две строки, которые дублируют друг друга).
 
 Каждый ref - это одно конкретное место в одном документе, описанное в
-доменных терминах (лист, строка, шкаф, клеммник, штифт, маркировка, KKS,
-проводник). Набор полей одинаков для обоих типов документов: то, чего в
-документе нет или что не распознано, остаётся null.
+доменных терминах. Набор полей ОДИНАКОВ для всех типов документов: то, чего в
+документе нет или что не распознано, остаётся null. Поля делятся на две группы:
+- "проводные" (клеммник, штифт, маркировка, KKS, проводник) - ими описываются
+  находки netlist<->scheme;
+- "элементные" (designator, article, name, quantity) - ими описываются находки
+  по связке scheme/assembly/spec.
 """
 
 # Виды замечаний. MISMATCH/MISSING/REVIEW - междокументные (как в HTML-таблице),
@@ -46,7 +54,7 @@ KIND_ENUM = [
 
 SEVERITY_ENUM = ["critical", "high", "medium", "low", "info"]
 
-DOC_TYPE_ENUM = ["netlist", "scheme"]
+DOC_TYPE_ENUM = ["netlist", "scheme", "assembly", "spec"]
 
 # Одно место в одном документе. Все доменные поля опциональны (null, если
 # в этом документе такого поля нет или оно не распознано) - обязательны
@@ -62,13 +70,14 @@ REF_SCHEMA = {
         "doc_type": {
             "type": "string",
             "enum": DOC_TYPE_ENUM,
-            "description": "netlist = таблица подключений, scheme = монтажная схема EPLAN"
+            "description": "netlist = таблица подключений, scheme = принципиальная схема (Э3), "
+                           "assembly = сборочный чертёж шкафа (СБ), spec = спецификация (СО, xlsx)"
         },
         "source_file": {
             "type": ["string", "null"],
             "description": "Файл с данными внутри папки документа, откуда взята находка "
                            "(connections.json / graph.json / netlist.json / classified.json / "
-                           "issues_candidates.json)"
+                           "issues_candidates.json / assembly.json / specification.json)"
         },
         "sheet": {
             "type": ["integer", "null"],
@@ -76,7 +85,8 @@ REF_SCHEMA = {
         },
         "row": {
             "type": ["integer", "null"],
-            "description": "Для netlist: id строки в таблице подключений. Для scheme: null"
+            "description": "Для netlist: id строки в таблице подключений. Для spec: номер строки "
+                           "в xlsx. Для scheme/assembly: null"
         },
         "cabinet": {
             "type": ["string", "null"],
@@ -105,6 +115,30 @@ REF_SCHEMA = {
         "conductor": {
             "type": ["string", "null"],
             "description": "Проводник/сигнал, например 'L+', 'PE', 'FB_OPEN', 'AI6'"
+        },
+        "designator": {
+            "type": ["string", "null"],
+            "description": "ПОЗИЦИОННОЕ ОБОЗНАЧЕНИЕ элемента - главный ключ сверки связки "
+                           "scheme/assembly/spec: '1QF1', 'DO1', 'G1', 'XT-G1'. В спецификации "
+                           "это колонка «Позиция», на схеме - device_tag, на сборочном "
+                           "чертеже - подпись у элемента"
+        },
+        "article": {
+            "type": ["string", "null"],
+            "description": "Артикул/код оборудования или тип-марка элемента, например "
+                           "'814174', 'DVP16SN11TS', 'NDR-120-24'. В спецификации это колонки "
+                           "«Код оборудования» / «Тип, марка», на сборочном чертеже - подпись "
+                           "рядом с позиционным обозначением"
+        },
+        "name": {
+            "type": ["string", "null"],
+            "description": "Наименование элемента из спецификации, например 'Автоматический "
+                           "выключатель NXB-63 3P 40А 6кА х-ка C (CHINT)'"
+        },
+        "quantity": {
+            "type": ["number", "null"],
+            "description": "Количество из спецификации (колонка «Количество») либо число "
+                           "фактически найденных экземпляров элемента в документе"
         },
         "found": {
             "type": ["string", "null"],
@@ -150,11 +184,15 @@ ERROR_ITEM_SCHEMA = {
         "refs": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 2,
+            "maxItems": 3,
             "items": REF_SCHEMA,
-            "description": "Места находки. Для cross_document - РОВНО ДВА ref'а: первый с "
-                           "doc_type='netlist', второй с doc_type='scheme'. Для single_document - "
-                           "один ref (или два ref'а на один и тот же документ, если это дубль)"
+            "description": "Места находки. Для cross_document netlist<->scheme - РОВНО ДВА ref'а: "
+                           "первый с doc_type='netlist', второй с doc_type='scheme'. Для сверки "
+                           "СВЯЗКИ (scheme/assembly/spec) - от двух до трёх ref'ов, по одному на "
+                           "документ, в порядке spec -> assembly -> scheme; документ, в котором "
+                           "элемента НЕТ, тоже получает ref (с found='не найден'). Для "
+                           "single_document - один ref (или два ref'а на один и тот же документ, "
+                           "если это дубль)"
         },
         "finding": {
             "type": "string",
@@ -285,5 +323,78 @@ EXAMPLE_ERRORS = [
         "action": "Подтвердить, что это намеренное шунтирование PE, либо устранить "
                   "дублирующее подключение.",
         "evidence": "statistics.duplicate_terminal_addresses: {\"00CJF02.XT01.PE\": 2}",
+    },
+    {
+        "kind": "MISMATCH",
+        "scope": "cross_document",
+        "severity": "high",
+        "type": "Разный артикул элемента в документах связки",
+        "refs": [
+            {
+                "document": "026.809.01.01-ИПК  ША1 СО_25.03.26",
+                "doc_type": "spec",
+                "source_file": "specification.json",
+                "sheet": None,
+                "row": 9,
+                "cabinet": None,
+                "terminal_block": None,
+                "pin": None,
+                "terminal_type": None,
+                "marking": None,
+                "kks": None,
+                "conductor": None,
+                "designator": "DO1",
+                "article": "DVP16SN11TS",
+                "name": "DVP16SN11TS 16 Point, 16DO (Transistor PNP), 24V DC Power",
+                "quantity": 1,
+                "found": "строка 9: код оборудования DVP16SN11TS, примечание "
+                         "«Замена на DVP16SN11T»",
+            },
+            {
+                "document": "026.809.01.01-ИПК  ША1 СБ_08.05.26",
+                "doc_type": "assembly",
+                "source_file": "assembly.json",
+                "sheet": 1,
+                "row": None,
+                "cabinet": None,
+                "terminal_block": None,
+                "pin": None,
+                "terminal_type": None,
+                "marking": None,
+                "kks": None,
+                "conductor": None,
+                "designator": "DO1",
+                "article": "DVP16SN11T",
+                "name": None,
+                "quantity": 1,
+                "found": "лист 1: подпись у элемента «DO1 DVP16SN11T»",
+            },
+            {
+                "document": "026.809.01.01-ИПК  ША1 Э3_10.04.26",
+                "doc_type": "scheme",
+                "source_file": "classified.json",
+                "sheet": 3,
+                "row": None,
+                "cabinet": None,
+                "terminal_block": None,
+                "pin": None,
+                "terminal_type": None,
+                "marking": None,
+                "kks": None,
+                "conductor": None,
+                "designator": "DO1",
+                "article": "DVP16SN11T",
+                "name": None,
+                "quantity": None,
+                "found": "лист 3: модуль подписан как DVP16SN11T",
+            },
+        ],
+        "finding": "Элемент DO1 в спецификации указан как DVP16SN11TS, а на сборочном "
+                   "чертеже и на принципиальной схеме - как DVP16SN11T. Спецификация "
+                   "расходится с двумя другими документами связки.",
+        "action": "Определить, какой модуль закупается фактически, и привести "
+                  "спецификацию к DVP16SN11T либо чертёж и схему к DVP16SN11TS.",
+        "evidence": "spec row 9: code='DVP16SN11TS', note='Замена на DVP16SN11T'; "
+                    "assembly: designator='DO1' article='DVP16SN11T'",
     },
 ]

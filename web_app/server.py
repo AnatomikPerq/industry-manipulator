@@ -57,18 +57,24 @@ sys.path.insert(0, str(ANALYZER_DIR))
 import main as pipeline          # noqa: E402
 from llm_check import check_server_alive  # noqa: E402  (быстрая проверка сервера)
 
-PROJECT_VERSION = "V1.1 beta"
+PROJECT_VERSION = "V1.2 beta"
 
 # Типы документов, которые принимает анализатор. Отсюда же фронтенд берёт список
 # для выпадающего выбора типа у каждого загруженного файла - единый источник.
 DOC_TYPES = [
-    {"key": "scheme", "title": "Принципиальная схема",
+    {"key": "scheme", "title": "Принципиальная схема (Э3)",
      "hint": "Векторный PDF монтажной/принципиальной схемы EPLAN"},
+    {"key": "assembly", "title": "Сборочный чертёж (СБ)",
+     "hint": "Векторный PDF сборочного чертежа шкафа: вид шкафа с размещением изделий"},
+    {"key": "spec", "title": "Спецификация оборудования (СО)",
+     "hint": "Книга Excel (.xlsx) со спецификацией по ГОСТ 21.110"},
     {"key": "netlist", "title": "Нетлист внешних подключений",
      "hint": "Таблица подключений (соединений) по ГОСТ"},
 ]
 VALID_TYPE_KEYS = {t["key"] for t in DOC_TYPES}
-ALLOWED_SUFFIXES = {".pdf"}
+
+# .xlsx - для спецификации (единственный документ связки не в PDF).
+ALLOWED_SUFFIXES = {".pdf", ".xlsx", ".xlsm"}
 
 
 # =====================================================================
@@ -509,17 +515,30 @@ class Handler(BaseHTTPRequestHandler):
         overrides = _load_type_overrides(cfg)
         files = []
         if base.is_dir():
-            for p in sorted(base.iterdir()):
-                if p.is_file() and p.suffix.lower() in ALLOWED_SUFFIXES:
-                    # приоритет: явный выбор пользователя (сохранён на сервере) ->
-                    # иначе пометка в имени файла ("(scheme)...", "(netlist)...")
-                    import ingest
-                    detected = overrides.get(p.name) or ingest.detect_doc_type(p.name)
-                    files.append({
-                        "name": p.name,
-                        "size": p.stat().st_size,
-                        "detected_type": detected,
-                    })
+            import bundles
+            import ingest
+            # rglob, а не iterdir: комплекты можно разложить по подпапкам
+            # ("base_files/связка 1/..."), и такие файлы тоже надо показать
+            for p in sorted(base.rglob("*")):
+                if not p.is_file() or p.suffix.lower() not in ALLOWED_SUFFIXES:
+                    continue
+                if p.name.startswith("~$") or p.name.startswith("."):
+                    continue          # временный файл открытой книги Excel
+                # приоритет: явный выбор пользователя (сохранён на сервере) ->
+                # иначе тип по имени файла (марка вида по ГОСТ или пометка)
+                detected = overrides.get(p.name) or ingest.detect_doc_type(p.name)
+                rel = p.relative_to(base)
+                subfolder = rel.parts[0] if len(rel.parts) > 1 else None
+                files.append({
+                    "name": p.name,
+                    "size": p.stat().st_size,
+                    "detected_type": detected,
+                    # связка, в которую файл попадёт при анализе. Обычно None:
+                    # все документы прогона - один проект (см. bundles.py), и
+                    # подписывать это на каждой строке незачем. Имя появляется,
+                    # только если пользователь сам разложил файлы по подпапкам.
+                    "bundle": subfolder,
+                })
         self._send_json({"files": files})
 
     def _api_upload(self):
@@ -551,7 +570,9 @@ class Handler(BaseHTTPRequestHandler):
                 continue
             name = Path(item.filename).name
             if Path(name).suffix.lower() not in ALLOWED_SUFFIXES:
-                skipped.append({"name": name, "reason": "не PDF"})
+                skipped.append({"name": name,
+                                "reason": "неподдерживаемый формат (нужен PDF для схем "
+                                          "и чертежей либо .xlsx для спецификации)"})
                 continue
             (base / name).write_bytes(item.file.read())
             saved.append(name)
@@ -606,7 +627,7 @@ class Handler(BaseHTTPRequestHandler):
         cfg = pipeline.load_config(_config_path())
         base = _base_files_dir(cfg)
         has_files = base.is_dir() and any(
-            p.suffix.lower() in ALLOWED_SUFFIXES for p in base.iterdir())
+            p.suffix.lower() in ALLOWED_SUFFIXES for p in base.rglob("*") if p.is_file())
         if not has_files:
             return self._send_json({"error": "Нет загруженных файлов для анализа"}, 400)
 

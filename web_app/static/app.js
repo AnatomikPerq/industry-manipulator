@@ -69,6 +69,7 @@ async function refreshFiles() {
     const data = await fetchJSON("/api/files");
     FILES = data.files.map((f) => ({
       name: f.name, size: f.size, type: f.detected_type || "",
+      bundle: f.bundle || "",
     }));
   } catch (e) {
     FILES = [];
@@ -79,22 +80,32 @@ async function refreshFiles() {
 function renderFiles() {
   const list = $("file-list");
   const empty = $("file-empty");
+  const note = $("file-note");
   if (FILES.length === 0) {
     list.innerHTML = "";
     empty.style.display = "block";
+    note.classList.remove("show");
     updateRunEnabled();
     return;
   }
   empty.style.display = "none";
+  note.classList.add("show");
   list.innerHTML = FILES.map((f, i) => {
     const opts = ['<option value="">— укажите тип —</option>']
       .concat(DOC_TYPES.map((t) =>
         `<option value="${t.key}" ${f.type === t.key ? "selected" : ""}>${esc(t.title)}</option>`))
       .join("");
+    // Связку показываем, ТОЛЬКО если файл лежит в подпапке: в обычном случае
+    // все загруженные документы - один проект, и подпись "проект" на каждой
+    // строке ничего не сообщает (об этом сказано один раз под списком).
+    const bundle = f.bundle
+      ? `<span class="fi-bundle" title="Отдельная связка (подпапка): ${esc(f.bundle)}">${esc(f.bundle)}</span>`
+      : "";
     return `
       <li class="file-item">
         <span class="fi-icon">▤</span>
         <span class="fi-name" title="${esc(f.name)}">${esc(f.name)}</span>
+        ${bundle}
         <span class="fi-size">${fmtSize(f.size)}</span>
         <select data-idx="${i}" class="${f.type ? "" : "unset"}">${opts}</select>
       </li>`;
@@ -125,15 +136,25 @@ async function saveType(name, type) {
   }
 }
 
+// Принимаемые расширения. Должны совпадать с ALLOWED_SUFFIXES в server.py:
+// .xlsx нужен спецификации (СО) - единственному документу связки не в PDF.
+const ACCEPTED_EXT = [".pdf", ".xlsx", ".xlsm"];
+
 async function uploadFiles(fileList) {
   const form = new FormData();
   let n = 0;
   for (const f of fileList) {
-    if (!f.name.toLowerCase().endsWith(".pdf")) continue;
+    const name = f.name.toLowerCase();
+    if (!ACCEPTED_EXT.some((ext) => name.endsWith(ext))) continue;
+    if (f.name.startsWith("~$")) continue;   // временный файл открытой книги Excel
     form.append("files", f, f.name);
     n++;
   }
-  if (n === 0) { logLine("Среди выбранного нет PDF-файлов.", "warn"); return; }
+  if (n === 0) {
+    logLine("Среди выбранного нет подходящих файлов: нужен PDF (схема, чертёж) "
+            + "или XLSX (спецификация).", "warn");
+    return;
+  }
 
   setStatus("Загрузка файлов…", true);
   try {
@@ -279,8 +300,28 @@ function renderReport(data) {
     return;
   }
 
+  // Находки бывают двух совершенно разных родов, и одной таблицей их не показать:
+  // у сверки "таблица подключений <-> схема" место находки описывается клеммой,
+  // штифтом и маркировкой провода, а у находок по спецификации и сборочному
+  // чертежу - позиционным обозначением, артикулом и количеством. Поэтому таблицы
+  // две, и находка попадает в ту, чьи колонки для неё осмысленны (по составу
+  // документов в refs, а не по scope: внутренняя ошибка спецификации - тоже
+  // "элементная" находка, и колонки клемм ей пусты).
+  const isBundle = (e) => (e.refs || []).some(
+    (r) => r.doc_type === "spec" || r.doc_type === "assembly");
+  const bundleErrors = errors.filter(isBundle);
+  const wiringErrors = errors.filter((e) => !isBundle(e));
+
+  const parts = [];
+  if (bundleErrors.length) parts.push(renderBundleTable(bundleErrors));
+  if (wiringErrors.length) parts.push(renderWiringTable(wiringErrors));
+  $("report-body").innerHTML = parts.join("");
+}
+
+function renderWiringTable(errors) {
   const rows = errors.map((e, i) => renderRow(e, i + 1)).join("");
-  $("report-body").innerHTML = `
+  return `
+    ${sectionTitle("Таблица подключений и схема", errors.length)}
     <div class="table-wrap">
       <table class="report">
         <thead>
@@ -311,6 +352,75 @@ function renderReport(data) {
         <tbody>${rows}</tbody>
       </table>
     </div>`;
+}
+
+function renderBundleTable(errors) {
+  const rows = errors.map((e, i) => renderBundleRow(e, i + 1)).join("");
+  return `
+    ${sectionTitle("Связка: спецификация, сборочный чертёж, схема", errors.length)}
+    <div class="table-wrap">
+      <table class="report">
+        <thead>
+          <tr>
+            <th class="grp-meta" rowspan="2">№</th>
+            <th class="grp-meta" rowspan="2">Вид</th>
+            <th class="grp-meta" rowspan="2">Важность</th>
+            <th class="grp-meta" rowspan="2">Позиция</th>
+            <th class="grp-source" colspan="3">Спецификация (СО)</th>
+            <th class="grp-install" colspan="2">Сборочный чертёж (СБ)</th>
+            <th class="grp-scheme" colspan="2">Схема (Э3)</th>
+            <th class="grp-out" colspan="2">Вывод</th>
+          </tr>
+          <tr>
+            <th class="sub-source">Строка</th>
+            <th class="sub-source">Артикул</th>
+            <th class="sub-source">Кол-во</th>
+            <th class="sub-install">Лист</th>
+            <th class="sub-install">Артикул</th>
+            <th class="sub-scheme">Лист</th>
+            <th class="sub-scheme">Артикул</th>
+            <th>Что найдено</th>
+            <th>Что требуется</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+function sectionTitle(text, n) {
+  return `<h3 class="report-group">${esc(text)} <span class="report-group-n">${n}</span></h3>`;
+}
+
+function renderBundleRow(err, num) {
+  const sp = refOf(err, "spec");
+  const asm = refOf(err, "assembly");
+  const sc = refOf(err, "scheme");
+  const sev = err.severity || "info";
+
+  const cell = (v, mono) => v === null || v === undefined || v === ""
+    ? `<td class="empty-cell">—</td>`
+    : `<td class="${mono ? "mono" : ""}">${esc(String(v))}</td>`;
+
+  // позиционное обозначение - ключ сверки; берём из любого ref'а, где оно есть
+  const designator = (err.refs || []).map((r) => r.designator).find((d) => d) || null;
+
+  return `
+    <tr data-sev="${sev}">
+      <td>${num}</td>
+      <td><span class="kind-badge">${esc(err.kind || "")}</span></td>
+      <td><span class="sev-badge sev-${sev}">${SEV_LABELS[sev] || sev}</span></td>
+      ${cell(designator, true)}
+      ${cell(sp ? sp.row : null)}
+      ${cell(sp ? sp.article : null, true)}
+      ${cell(sp && sp.quantity != null ? sp.quantity : null)}
+      ${cell(asm && asm.sheet != null ? "лист " + asm.sheet : null)}
+      ${cell(asm ? asm.article : null, true)}
+      ${cell(sc && sc.sheet != null ? "лист " + sc.sheet : null)}
+      ${cell(sc ? sc.article : null, true)}
+      <td class="finding">${esc(err.finding || "")}</td>
+      <td class="action">${esc(err.action || "")}</td>
+    </tr>`;
 }
 
 // находит ref по типу документа

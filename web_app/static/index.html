@@ -14,7 +14,7 @@
       <h1>Анализатор проектной документации</h1>
       <div class="sub">Проверка EPLAN-схем и таблиц подключений на ошибки</div>
     </div>
-    <span class="version-badge" id="version-badge">V1.1 beta</span>
+    <span class="version-badge" id="version-badge">V1.2 beta</span>
   </header>
 
   <main>
@@ -31,12 +31,18 @@
               </svg>
             </div>
             <div class="big">Перетащите файлы сюда</div>
-            <div class="small">или нажмите, чтобы выбрать. Принимаются PDF.</div>
-            <input type="file" id="file-input" accept="application/pdf" multiple hidden>
+            <div class="small">или нажмите, чтобы выбрать. PDF - схемы и чертежи,
+              XLSX - спецификация.</div>
+            <input type="file" id="file-input"
+                   accept=".pdf,.xlsx,.xlsm,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                   multiple hidden>
           </div>
 
           <ul class="file-list" id="file-list"></ul>
           <div class="file-empty" id="file-empty">Файлы ещё не загружены.</div>
+          <div class="file-note" id="file-note">Все загруженные документы считаются
+            одним проектом и сверяются между собой. Состав может быть любым: схема,
+            сборочный чертёж, спецификация, нетлист — или только часть из них.</div>
 
           <div class="run-wrap">
             <div class="split" style="width:100%">
@@ -108,7 +114,7 @@
 
     <footer class="app-footer">
       <b>ИНДУСТРИЯ МАНИПУЛЯТОР</b> · Анализатор проектной документации ·
-      <span id="footer-version">V1.1 beta</span>
+      <span id="footer-version">V1.2 beta</span>
     </footer>
   </main>
 

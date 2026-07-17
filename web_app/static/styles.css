@@ -11,6 +11,8 @@
   --orange:      #f2811d;
   --orange-dark: #d96b0a;
   --orange-soft: #fff1e3;
+  /* третий документ связки (принципиальная схема) в таблице сверки */
+  --green-soft:  #e8f6ec;
 
   --ink:    #1a2530;
   --muted:  #64717e;
@@ -142,12 +144,30 @@ main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
 .file-item .fi-icon { color: var(--orange); font-size: 17px; flex: none; }
 .file-item .fi-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .file-item .fi-size { color: var(--muted); font-size: 12px; flex: none; }
+/* связка, в которую попадёт файл (комплект документов одного шкафа) */
+.file-item .fi-bundle {
+  flex: none; max-width: 220px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: 11.5px; font-weight: 600;
+  color: var(--blue-dark); background: var(--blue-soft);
+  border: 1px solid var(--blue-line); border-radius: 10px; padding: 1px 8px;
+}
+.file-item .fi-bundle-none {
+  color: var(--muted); background: #eef2f6; border-color: var(--line);
+  font-weight: 500;
+}
 .file-item select {
   border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; background: #fff;
   color: var(--ink); flex: none; min-height: 32px;
 }
 .file-item select.unset { border-color: var(--orange); background: var(--orange-soft); }
 .file-empty { color: var(--muted); font-size: 13px; padding: 8px 2px; }
+/* пояснение про связку: показывается только когда файлы загружены */
+.file-note {
+  display: none; color: var(--muted); font-size: 12px; line-height: 1.45;
+  padding: 8px 10px; margin-top: 4px;
+  background: var(--blue-soft); border: 1px solid var(--blue-line); border-radius: 6px;
+}
+.file-note.show { display: block; }
 
 /* ---------- Кнопки ---------- */
 .btn {
@@ -268,9 +288,24 @@ table.report thead tr:nth-child(2) th { background: #eef2f6; font-size: 11.5px; 
 .grp-meta   { background: #e9edf1; }
 .grp-source { background: var(--blue-soft); }
 .grp-install{ background: var(--orange-soft); }
+/* третья группа колонок - принципиальная схема в таблице сверки связки */
+.grp-scheme { background: var(--green-soft); }
 .grp-out    { background: #eef2f6; }
 .sub-source { background: var(--blue-soft) !important; }
 .sub-install{ background: var(--orange-soft) !important; }
+.sub-scheme { background: var(--green-soft) !important; }
+
+/* заголовок группы находок (таблиц в отчёте две: сверка связки и сверка
+   таблицы подключений со схемой - у них разные колонки) */
+.report-group {
+  margin: 18px 0 8px; font-size: 14px; font-weight: 650; color: var(--ink);
+  display: flex; align-items: center; gap: 8px;
+}
+.report-group:first-child { margin-top: 0; }
+.report-group-n {
+  background: #eef2f6; border: 1px solid var(--line); border-radius: 10px;
+  padding: 0 8px; font-size: 11.5px; font-weight: 600; color: var(--info);
+}
 
 table.report tbody tr:hover td { background: #f7fbff; }
 table.report td.mono { white-space: nowrap; }

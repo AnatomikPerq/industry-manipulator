@@ -6,4 +6,6 @@ open-interpreter
 
 # базовые скрипты-парсеры PDF (data/base_analysis_scripts)
 pdfplumber>=0.10.0     # netlist_to_json.py - таблицы соединений
-PyMuPDF>=1.23.0        # schematic_diagram_to_data.py - схемы EPLAN (импортируется как fitz)
+PyMuPDF>=1.23.0        # schematic_diagram_to_data.py - схемы EPLAN, assembly_drawing_to_data.py
+                       #   - сборочные чертежи (импортируется как fitz)
+openpyxl>=3.1.0        # specification_to_json.py - спецификации оборудования (.xlsx)

@@ -29,6 +29,7 @@ import argparse
 import json
 import logging
 import sys
+import traceback
 from collections import Counter
 from pathlib import Path
 
@@ -180,12 +181,17 @@ def load_type_overrides(cfg: dict) -> dict:
         return {}
 
 
-def run_extraction_stage(cfg: dict, doc_types: dict = None) -> dict:
-    """Стадия 0: PDF -> data/<имя документа>/*.json + data/manifest.json.
+def run_extraction_stage(cfg: dict, doc_types: dict = None,
+                         bundles: dict = None) -> dict:
+    """Стадия 0: PDF/XLSX -> data/<имя документа>/*.json + data/manifest.json.
 
     Тип документа берётся (по убыванию приоритета): из doc_types (передан явно,
-    например с формы загрузки) -> из data/.doc_types.json -> из пометки в имени
-    файла ("(scheme)...", "(netlist)...").
+    например с формы загрузки) -> из data/.doc_types.json -> из имени файла
+    (марка вида по ГОСТ "Э3"/"СБ"/"СО" либо пометка "(scheme)...").
+
+    bundles: {"имя файла": "связка 1"} - явная привязка документа к связке.
+    Если не передано, связка определяется по подпапке в base_files или по
+    общему префиксу имени файла (см. bundles.py).
     """
     paths = cfg["paths"]
     overrides = doc_types or load_type_overrides(cfg)
@@ -195,15 +201,23 @@ def run_extraction_stage(cfg: dict, doc_types: dict = None) -> dict:
         data_dir=resolve_path(paths["input_dir"]),
         overrides=overrides,
         overwrite=not cfg.get("extraction", {}).get("reuse_existing", False),
+        bundle_overrides=bundles,
     )
 
 
 def _finding_signature(finding: dict) -> tuple:
-    """Подпись находки для дедупликации: вид + множество физических точек, к которым
-    она относится (документ + клеммник + штифт + KKS). По ней детерминированные
-    находки чекера сопоставляются с находками агентов, чтобы не задваивать."""
+    """Подпись находки для дедупликации: вид + множество точек, к которым она
+    относится. По ней детерминированные находки чекера сопоставляются с
+    находками агентов, чтобы не задваивать.
+
+    В подпись входят И "проводные" поля (клеммник/штифт/KKS), И "элементные"
+    (позиционное обозначение/артикул). Без последних ВСЕ находки по связке
+    схлопывались бы в одну подпись (клеммника и KKS у них нет - там сплошные
+    None), и из отчёта пропадали бы разные ошибки по разным элементам.
+    """
     points = frozenset(
-        (r.get("document"), r.get("terminal_block"), r.get("pin"), r.get("kks"))
+        (r.get("document"), r.get("terminal_block"), r.get("pin"), r.get("kks"),
+         r.get("designator"), r.get("article"))
         for r in finding.get("refs", [])
     )
     return (finding.get("kind"), points)
@@ -213,10 +227,20 @@ def run_rules_stage(cfg: dict, data_dir: Path) -> list:
     """Стадия правил: детерминированные чекеры по КАЖДОМУ типу документа.
 
     Читает manifest.json и прогоняет по каждому документу чекер его типа:
-      netlist -> netlist_rules.check_connections_file (connections.json)
-      scheme  -> schematic_rules.check_schematic_file (nets.json)
+      netlist  -> netlist_rules.check_connections_file (connections.json)
+      scheme   -> schematic_rules.check_schematic_file (nets.json)
+      spec     -> spec_rules.check_specification_file (specification.json)
+      assembly -> assembly_rules.check_assembly_file (assembly.json)
     Возвращает находки в формате schema.REPORT_SCHEMA - том же, что у агентов.
     LLM здесь не участвует.
+
+    Здесь долго стояло, что у СБОРОЧНОГО ЧЕРТЕЖА однодокументного чекера нет и
+    быть не может: в одиночку чертёж проверять нечем, всё проверяется сверкой с
+    другими документами связки. Это оказалось неверно. Чертёж многолистовой, и
+    одно изделие показано на нескольких листах сразу (общий вид, вид двери,
+    таблица надписей); изделие, выпавшее с одного из них, доказывается ВНУТРИ
+    самого чертежа - см. assembly_rules.py. Сверка с другими документами
+    по-прежнему живёт отдельно, на стадии связок (run_bundle_stage).
 
     Раньше здесь стоял фильтр `if doc_type != "netlist": continue`, из-за которого
     схемы не проверялись вообще: анализ комплекта из одних схем всегда давал ноль
@@ -233,6 +257,8 @@ def run_rules_stage(cfg: dict, data_dir: Path) -> list:
     checkers = {
         "netlist": ("netlist_rules.py", "check_connections_file", "connections.json"),
         "scheme": ("schematic_rules.py", "check_schematic_file", "nets.json"),
+        "spec": ("spec_rules.py", "check_specification_file", "specification.json"),
+        "assembly": ("assembly_rules.py", "check_assembly_file", "assembly.json"),
     }
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -240,8 +266,11 @@ def run_rules_stage(cfg: dict, data_dir: Path) -> list:
     for doc in manifest.get("documents", []):
         checker = checkers.get(doc.get("doc_type"))
         if checker is None:
-            logger.info("  правила для типа %r не заданы, документ %s пропущен",
-                        doc.get("doc_type"), doc.get("name"))
+            # Тип без своего чекера - не сбой: документ всё равно участвует в
+            # сверке связки (run_bundle_stage) и его видят агенты.
+            logger.info("  %s (%s): отдельных правил для этого вида документа нет, "
+                        "он проверяется сверкой с другими документами связки",
+                        doc.get("name"), doc.get("doc_type"))
             continue
         script, func_name, data_file = checker
 
@@ -261,6 +290,68 @@ def run_rules_stage(cfg: dict, data_dir: Path) -> list:
         logger.info("  правила по %s (%s): %d находок",
                     doc["name"], doc["doc_type"], len(doc_findings))
         findings.extend(doc_findings)
+    return findings
+
+
+def run_bundle_stage(cfg: dict, data_dir: Path) -> list:
+    """Стадия СВЯЗОК: детерминированная сверка документов ОДНОГО шкафа между собой.
+
+    Стадия правил (run_rules_stage) проверяет каждый документ по отдельности и
+    по построению не видит ошибок ВИДА "в спецификации один артикул, а на
+    чертеже другой". Здесь документы группируются по связкам (поле bundle в
+    манифесте, см. bundles.py) и каждая связка целиком отдаётся bundle_rules.py.
+
+    LLM здесь не участвует. Возвращает находки в формате schema.REPORT_SCHEMA.
+    """
+    manifest_path = data_dir / "manifest.json"
+    if not manifest_path.exists():
+        logger.warning("manifest.json не найден в %s - стадия связок пропущена", data_dir)
+        return []
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    documents = manifest.get("documents", [])
+    if not documents:
+        return []
+
+    scripts_dir = resolve_path(cfg["paths"]["scripts_dir"])
+    try:
+        module = _load_parser_module(scripts_dir, "bundle_rules.py")
+    except Exception as e:  # noqa: BLE001
+        logger.error("Чекер связок не загрузился: %s", e)
+        return []
+
+    # {связка: {тип документа: сведения}}. Если в одной связке ДВА документа
+    # одного типа (две схемы на шкаф), берём первый и говорим об этом вслух:
+    # молча потерять второй хуже, чем предупредить.
+    groups = {}
+    for doc in documents:
+        if doc.get("status") == "failed":
+            continue
+        bundle = doc.get("bundle") or "без связки"
+        slot = groups.setdefault(bundle, {})
+        dtype = doc.get("doc_type")
+        if dtype in slot:
+            logger.warning("Связка %r: документов типа %r больше одного (%s и %s) - "
+                           "для сверки взят первый", bundle, dtype,
+                           slot[dtype]["name"], doc.get("name"))
+            continue
+        slot[dtype] = {
+            "name": doc["name"],
+            "data_dir": str(PROJECT_ROOT / doc["data_dir"]),
+            "source": doc.get("source_file"),
+        }
+
+    findings = []
+    for bundle, docs in groups.items():
+        try:
+            bundle_findings = module.check_bundle(bundle, docs)
+        except Exception as e:  # noqa: BLE001 - падение чекера не должно ронять прогон
+            logger.error("  связка %r: чекер упал: %s", bundle, e)
+            logger.debug(traceback.format_exc())
+            continue
+        logger.info("  сверка связки %r (%s): %d находок", bundle,
+                    ", ".join(sorted(t for t in docs if t)), len(bundle_findings))
+        findings.extend(bundle_findings)
     return findings
 
 
@@ -306,10 +397,17 @@ def preflight_llm(cfg: dict) -> None:
 
     Нужна, чтобы при недоступном сервере анализ падал сразу с понятной ошибкой
     в консоль, а не висел минутами и не выдавал криптическую ошибку соединения
-    litellm где-то в середине. Проверяются серверы обоих агентов из config.
+    litellm где-то в середине. Проверяется сервер каждого агента, который
+    реально будет запущен (при agents.count: 1 - только выбранный single_agent).
     """
+    agents_cfg = cfg.get("agents", {})
+    if agents_cfg.get("count", 2) == 1:
+        keys = (agents_cfg.get("single_agent", "agent_1"),)
+    else:
+        keys = ("agent_1", "agent_2")
+
     checked = {}
-    for key in ("agent_1", "agent_2"):
+    for key in keys:
         scfg = cfg["llm_servers"][key]
         base = scfg["base_url"]
         if base in checked:
@@ -389,12 +487,17 @@ def clear_previous_results(cfg: dict) -> None:
 def run_pipeline(input_dir: str = None, known_errors_path: str = None,
                  output_dir: str = None, config_path: str = None,
                  doc_types: dict = None, skip_extract: bool = False,
-                 skip_agents: bool = False, clear_previous: bool = False) -> dict:
+                 skip_agents: bool = False, clear_previous: bool = False,
+                 bundles: dict = None) -> dict:
     """Главная точка входа для использования из другого скрипта (без CLI).
 
-    doc_types: {"имя файла.pdf": "scheme"|"netlist"} - явная пометка типа
-        документа (приходит из формы загрузки на сайте). Если не передано,
-        тип берётся из пометки в начале имени файла: "(scheme)...", "(netlist)...".
+    doc_types: {"имя файла.pdf": "scheme"|"assembly"|"spec"|"netlist"} - явная
+        пометка типа документа (приходит из формы загрузки на сайте). Если не
+        передано, тип берётся из имени файла: марка вида по ГОСТ ("Э3", "СБ",
+        "СО") либо пометка в начале имени ("(scheme)...", "(netlist)...").
+    bundles: {"имя файла.pdf": "связка 1"} - явная привязка документа к связке
+        (комплекту одного шкафа). Если не передано, связка определяется по
+        подпапке в base_files или по общему префиксу имени файла.
     skip_extract: не перезапускать базовые парсеры, работать по тому,
         что уже лежит в data/.
     skip_agents: НЕ запускать LLM-агентов и мерджер - отчёт собирается только из
@@ -421,8 +524,8 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
         logger.info("Стадия извлечения пропущена (--skip-extract), "
                     "анализируем то, что уже лежит в %s", data_dir)
     else:
-        logger.info("Стадия 0: извлечение данных из PDF базовыми скриптами-парсерами")
-        manifest = run_extraction_stage(cfg, doc_types)
+        logger.info("Стадия 0: извлечение данных базовыми скриптами-парсерами")
+        manifest = run_extraction_stage(cfg, doc_types, bundles)
         logger.info("Извлечено документов: %d из %d",
                     manifest["summary"]["extracted_ok"],
                     manifest["summary"]["total_documents"])
@@ -431,9 +534,16 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
     logger.info("Загружено %d заранее известных ошибок из %s",
                 len(known_errors), known_errors_path)
 
-    logger.info("Стадия правил: детерминированный чекер таблиц подключений")
+    logger.info("Стадия правил: детерминированные чекеры по каждому документу")
     rule_findings = run_rules_stage(cfg, data_dir)
-    logger.info("Чекер нашёл %d находок (до запуска нейросетей)", len(rule_findings))
+    logger.info("Чекеры документов нашли %d находок", len(rule_findings))
+
+    logger.info("Стадия связок: сверка документов одного шкафа между собой")
+    bundle_findings = run_bundle_stage(cfg, data_dir)
+    logger.info("Сверка связок нашла %d находок", len(bundle_findings))
+
+    rule_findings = rule_findings + bundle_findings
+    logger.info("Всего находок скриптов: %d (до запуска нейросетей)", len(rule_findings))
 
     if skip_agents:
         logger.info("Режим без ИИ: агенты и мерджер пропущены, отчёт только из находок чекера")
@@ -441,7 +551,8 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
             "errors": sorted(rule_findings,
                              key=lambda f: SEVERITY_ORDER.get(f.get("severity"), 9)),
             "summary": (f"Анализ без ИИ (только скрипты): найдено {len(rule_findings)} "
-                        f"замечаний детерминированным чекером таблиц подключений."),
+                        f"замечаний детерминированными чекерами документов и сверкой "
+                        f"связок."),
         }
         merged_path = out_dir / "merged_report.json"
         merged_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2),
@@ -462,26 +573,46 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
     helper_dir = resolve_path(cfg["paths"]["helper_scripts_dir"])
     helper_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Запуск агента анализа №1 (%s)", cfg["llm_servers"]["agent_1"]["model"])
-    report_1 = run_analysis_agent(cfg["llm_servers"]["agent_1"], str(data_dir),
-                                  helper_dir=str(helper_dir),
-                                  max_json_repair_attempts=max_repair, **limits)
+    agents_cfg = cfg.get("agents", {})
+    agent_count = agents_cfg.get("count", 2)
 
-    logger.info("Запуск агента анализа №2 (%s)", cfg["llm_servers"]["agent_2"]["model"])
-    report_2 = run_analysis_agent(cfg["llm_servers"]["agent_2"], str(data_dir),
-                                  helper_dir=str(helper_dir),
-                                  max_json_repair_attempts=max_repair, **limits)
+    if agent_count == 1:
+        # Один агент - мерджить не с кем, LLM-сшиватель (merge_reports.py) не
+        # вызывается. Отчёт агента напрямую идёт в combine_rule_and_agent_findings
+        # ниже - "слияние" в этом режиме нужно только с находками чекеров/связок.
+        agent_key = agents_cfg.get("single_agent", "agent_1")
+        logger.info("Режим одного агента: запуск (%s / %s)",
+                    agent_key, cfg["llm_servers"][agent_key]["model"])
+        report = run_analysis_agent(cfg["llm_servers"][agent_key], str(data_dir),
+                                    helper_dir=str(helper_dir),
+                                    max_json_repair_attempts=max_repair, **limits)
 
-    if cfg.get("logging", {}).get("save_raw_agent_json", True):
-        (out_dir / "report_1.json").write_text(
-            json.dumps(report_1, ensure_ascii=False, indent=2), encoding="utf-8")
-        (out_dir / "report_2.json").write_text(
-            json.dumps(report_2, ensure_ascii=False, indent=2), encoding="utf-8")
+        if cfg.get("logging", {}).get("save_raw_agent_json", True):
+            (out_dir / "report_1.json").write_text(
+                json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    logger.info("Слияние отчётов моделью-сшивателем")
-    merger_cfg = resolve_merger_cfg(cfg)
-    merged = merge_reports(merger_cfg, report_1, report_2, known_errors,
-                           max_json_repair_attempts=max_repair)
+        merged = report
+    else:
+        logger.info("Запуск агента анализа №1 (%s)", cfg["llm_servers"]["agent_1"]["model"])
+        report_1 = run_analysis_agent(cfg["llm_servers"]["agent_1"], str(data_dir),
+                                      helper_dir=str(helper_dir),
+                                      max_json_repair_attempts=max_repair, **limits)
+
+        logger.info("Запуск агента анализа №2 (%s)", cfg["llm_servers"]["agent_2"]["model"])
+        report_2 = run_analysis_agent(cfg["llm_servers"]["agent_2"], str(data_dir),
+                                      helper_dir=str(helper_dir),
+                                      max_json_repair_attempts=max_repair, **limits)
+
+        if cfg.get("logging", {}).get("save_raw_agent_json", True):
+            (out_dir / "report_1.json").write_text(
+                json.dumps(report_1, ensure_ascii=False, indent=2), encoding="utf-8")
+            (out_dir / "report_2.json").write_text(
+                json.dumps(report_2, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        logger.info("Слияние отчётов моделью-сшивателем")
+        merger_cfg = resolve_merger_cfg(cfg)
+        merged = merge_reports(merger_cfg, report_1, report_2, known_errors,
+                               max_json_repair_attempts=max_repair)
 
     # Находки чекера добавляем ПОСЛЕ LLM-слияния и детерминированно: они ground truth
     # и не должны потеряться на слиянии (слабая модель-сшиватель уже роняла находки).
@@ -535,10 +666,11 @@ def main():
     if args.rules_only:
         cfg = load_config(args.config)
         data_dir = resolve_path(args.input or cfg["paths"]["input_dir"])
-        findings = run_rules_stage(cfg, data_dir)
+        findings = run_rules_stage(cfg, data_dir) + run_bundle_stage(cfg, data_dir)
         print(format_text_report({"errors": sorted(
             findings, key=lambda f: SEVERITY_ORDER.get(f.get("severity"), 9)),
-            "summary": f"Детерминированный чекер: найдено {len(findings)} замечаний."}))
+            "summary": f"Детерминированные чекеры документов и сверка связок: "
+                       f"найдено {len(findings)} замечаний."}))
         return
 
     try:
