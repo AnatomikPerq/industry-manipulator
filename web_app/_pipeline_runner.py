@@ -54,6 +54,7 @@ def build_session_config(base_config_path, paths: dict, out_path) -> str:
     cfg["paths"] = dict(cfg["paths"])
     cfg["paths"].update({
         "base_files_dir": paths["base_files_dir"],
+        "full_projects_dir": paths["full_projects_dir"],
         "scripts_dir": paths["scripts_dir"],
         "helper_scripts_dir": paths["helper_scripts_dir"],
         "input_dir": paths["input_dir"],

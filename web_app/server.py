@@ -64,7 +64,7 @@ import main as pipeline          # noqa: E402
 from llm_check import check_server_alive  # noqa: E402  (быстрая проверка сервера)
 
 from queue_worker import AnalysisQueue    # noqa: E402
-from sessions import SessionError, SessionStore  # noqa: E402
+from sessions import FULL_PROJECT_TYPE, SessionError, SessionStore  # noqa: E402
 
 PROJECT_VERSION = "V1.3"
 
@@ -79,6 +79,14 @@ DOC_TYPES = [
      "hint": "Книга Excel (.xlsx) со спецификацией по ГОСТ 21.110"},
     {"key": "netlist", "title": "Нетлист внешних подключений",
      "hint": "Таблица подключений (соединений) по ГОСТ"},
+    # Не вид документа, а КОНТЕЙНЕР документов: альбом целиком на 200+ листов.
+    # Пайплайн режет его на отдельные документы по графе «наименование»
+    # штампа и раскладывает по связкам-шкафам (full_project.py), так что тип
+    # каждой части определяется потом сам и указывать его не нужно.
+    {"key": FULL_PROJECT_TYPE, "title": "Полный проект (альбом целиком)",
+     "hint": "Один PDF на 180-300 листов со схемами, чертежами и спецификацией "
+             "нескольких шкафов. Будет автоматически разрезан на документы, "
+             "каждый шкаф станет отдельной связкой"},
 ]
 VALID_TYPE_KEYS = {t["key"] for t in DOC_TYPES}
 

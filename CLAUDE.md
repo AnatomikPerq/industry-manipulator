@@ -34,6 +34,17 @@ origin main`) unless the user says otherwise for a specific commit.
 отсутствие документа НЕ ошибка и о нём не сообщается; правила сами пропускают
 связку, если нужных им документов нет.
 
+**ПОЛНЫЙ ПРОЕКТ** (`full_project.py`) — второй способ загрузки: не комплект файлов на
+один шкаф, а альбом целиком, один PDF на 184–309 листов, внутри которого схемы десятка
+разных шкафов, общие виды, спецификация, кабельный журнал и планы расположения. Альбом
+режется на документы **до** стадии извлечения; части выкладываются в
+`base_files/<шкаф>/` с пометкой типа в имени (`(scheme)ЩС2. Схема ...pdf`), после чего
+`ingest.py` и `bundles.py` работают как раньше — «пометка типа» и «подпапка = связка»
+уже существуют, править их не пришлось. Здесь **связка = ШКАФ**, а не весь прогон: в
+альбоме их до пятнадцати, и обозначения в них пересекаются (`1QF1` есть и в ШУПЧ1, и в
+ЩС1, но это разные аппараты) — свалив всё в одну связку, получаешь вал ложных «разный
+артикул у одного обозначения».
+
 Two top-level pieces:
 - `web_app/` — локальный веб-интерфейс (stdlib `http.server`, без зависимостей): **сессии**
   анализа, очередь, загрузка PDF, запуск/отмена, просмотр отчёта.
@@ -104,6 +115,35 @@ still the false-positive corpus for schematic rules (profiles C and D): recover 
 
 ### Pipeline stages (`analyzer_to_errors/main.py::run_pipeline`)
 
+−1. **Нарезка альбомов** (`full_project.py`, до извлечения) — PDF из `data/full_projects/`
+   плюс всё, что нашлось в `base_files/` и оказалось альбомом (`is_full_project`: ≥80
+   листов; самый большой одиночный документ корпуса — спецификация на 64, самый маленький
+   альбом — 184). Опознанный альбом **переезжает** в `full_projects/`, иначе извлечение
+   следом попыталось бы разобрать его как обычный документ. Детект живёт здесь, а не в
+   `web_app`, потому что там нет и не должно быть `fitz`.
+
+   **Граница документа — графа «наименование» основной надписи** (ГОСТ 21.101). Часть =
+   серия подряд идущих листов с одним наименованием; лист без графы (форма 4, продолжение)
+   наследует наименование предыдущего. Два других сигнала **измерены и отвергнуты**:
+   *номер листа* (на Енисее `4.1…4.70`, `5.1…5.41` — ведущая цифра и есть документ; но ЭОМ
+   нумерует альбом сквозно `6`, `22.1`, `40.2`, где `.N` — подлист) и *форма штампа*
+   (наличие граф «Стадия»+«Листов» = первый лист; по ГОСТ верно и на Енисее даёт ровно 10
+   документов, но ЭОМ ставит полную форму на КАЖДОМ листе — 48 «документов», половина по
+   одной странице). Оба проверяют привычку бюро, а не структуру альбома.
+
+   Наименование **объекта** отделяется от наименования **документа** тем, что повторяется
+   на >50% заполненных листов (в штампе они стоят в одной колонке друг под другом, и по
+   координате их не разделить — число строк верхней части плавает). Тот же приём, что в
+   `assembly_rules.py` для парного листа.
+
+   Обозначение шкафа из наименования — ключ связки. Раскладки **приводятся к кириллице**
+   (`_unify_layout`): бюро пишет однолинейную схему как `ЩC1` с ЛАТИНСКОЙ `C`, а
+   принципиальную того же шкафа — как `ЩС1`; без приведения это две разные связки, и два
+   документа одного шкафа не сверяются друг с другом молча. Части без шкафа в наименовании
+   (спецификация и кабельный журнал идут на весь объект) уходят в связку `общие документы`.
+   Планы расположения, молниезащита, установочные чертежи и ПЗ **сознательно не
+   анализируются** (`TITLE_SKIP`) — комплектацию шкафа они не описывают.
+
 0. **Extraction** (`ingest.py`) — PDF/XLSX in `data/base_files/` (scanned **recursively**:
    subfolders are explicit bundles) → per-document data folders. The document type is
    resolved as, in priority order: `doc_types` argument (from the upload form) →
@@ -149,6 +189,19 @@ still the false-positive corpus for schematic rules (profiles C and D): recover 
    the spec, spec item not on the drawing.
    Findings from both stages are ground truth and are merged back deterministically.
 
+   **Спецификация полного проекта одна на весь объект** и лежит в связке `общие
+   документы`. Без неё у связок-шкафов спецификации нет вообще, и вся сверка молча не
+   выполняется — поэтому `_lend_project_wide_docs` (`main.py`) одалживает её каждому шкафу
+   с пометкой `project_wide`. Пометка выключает два направления, где спецификация всего
+   объекта заведомо врёт: `rule_spec_element_not_on_assembly` (оборудование двенадцати
+   чужих шкафов закономерно отсутствует на чертеже разбираемого) и `rule_designation_mismatch`
+   (у неё обозначение альбома, а не шкафа — иначе одно расхождение штампов размножилось бы
+   на все пятнадцать связок). Обратное направление — «обозначение есть на чертеже и схеме,
+   а в спецификации нет» — на ней верно и работает. По той же причине `spec_rules`
+   получает `project_wide=True` и пропускает `rule_duplicate_code`: один артикул в
+   нескольких строках здесь норма (один автомат стоит в десятке щитов), замер — 112 ложных
+   находок на 837 строк.
+
    Deliberately few rules — every checker carries a long comment listing checks that were
    tried and **rejected** for false-positive rates measured on real files (a false positive
    costs more than a miss: the engineer checks it against the drawing and stops trusting the
@@ -160,7 +213,11 @@ still the false-positive corpus for schematic rules (profiles C and D): recover 
    (articles have no pins), and article comparison only uses `pair_source="block"` pairs (on
    ШУ-ТМ 3266 of 3277 pairs are `nearest`, where the article is often pulled from a
    neighbour). An "article" with no digit in it is not an article but a caption on a picture
-   of the product (`Status`, `Force Button`) — it is filtered out. Where a guess is
+   of the product (`Status`, `Force Button`) — it is filtered out. Цифра в «артикуле» ещё не
+   делает его артикулом: маркировка вывода по МЭК (`1/L1`, `2/T1`, `13NO`, `A1`) проходит
+   фильтр цифры и отсекается отдельно (`IEC_TERMINAL_RE`) — на ЩС1 полного проекта две
+   находки из трёх были ровно такими, причём подписями выводов одного контактора
+   оказывались ОБЕ стороны пары (артикул `1/L1` при позиции `13NO`). Where a guess is
    unavoidable ("not drawn — forgotten, or simply never drawn?"), the finding is a `REVIEW`
    (a question for the engineer), not an assertion of error.
 3. **Agents** (`oi_agent.py`, Open Interpreter) — two independently-configured LLM agents
@@ -202,6 +259,20 @@ exposing `extract_to_dir(path, out_dir) -> (files, stats)`:
   not letter — bureaus differ (16 vs 9 columns). Its hard part is expanding the «Позиция»
   column: `1KL1...1KL3` and `1KL1 ... 50KL1` (range over the *leading* number) are both
   handled by comparing the two ends' numeric fields, not by a prefix+number regex.)
+- `spec` **в PDF** → `specification_pdf_to_json.py`. Парсер выбирается по расширению
+  (`scripts_by_suffix` в `DOC_TYPES`): в полном проекте спецификация — такой же лист
+  альбома, книги Excel к ней нет, а без неё вся сверка по связке не работает. Контракт
+  выхода тот же `specification.json`, а разбор строки (раскрытие «Позиции», отсев
+  разделов) **импортируется** из xlsx-парсера, чтобы две копии не разъехались.
+  Колонки берутся из **линовки** таблицы: разделители нарисованы короткими отрезками по
+  границам ячеек (длинных вертикалей на листе нет ни одной), поэтому копится суммарная
+  длина вертикальных отрезков по каждому X. Границы по заголовкам (середина между
+  центрами соседних) **пробовались и не годятся**: колонки резко разной ширины, середина
+  между «Позицией» и «Наименованием» проходит посреди наименования, и его перенос на
+  вторую строку становился ложным обозначением (`4шт`, `248 Шайба 6.65Г.016 ГОСТ 6402-70`)
+  — мусором в главном ключе сверки. Строки якорятся на колонке «Количество»: линовка даёт
+  23 горизонтальные линейки на ~25 строк, а просвет по вертикали (шаг 23–30 px против
+  высоты строки 14) не отличает соседнюю строку от переноса внутри ячейки.
 
 **Layout profiles** (`data/base_analysis_scripts/profiles.py`): formatting rules (regexes)
 are factored per design-bureau template and auto-detected on load (profiles `A`–`D`:
@@ -262,7 +333,12 @@ errors vanish from the report.
 
 Единица работы интерфейса — **СЕССИЯ** (`sessions.py`): комплект документов одного шкафа
 плюс её прогон и её отчёт, со своей папкой `analyzer_to_errors/sessions/<id>/`
-(`session.json`, `config.yaml`, `log.txt`, `data/`, `output/`). Сессии создаются в
+(`session.json`, `config.yaml`, `log.txt`, `data/`, `output/`). Полный проект грузится
+той же формой: файл ложится в `base_files/`, а пайплайн сам опознаёт его по числу листов
+и переносит в `data/full_projects/` сессии. Папка эта лежит **рядом** с `base_files`, а не
+внутри: `base_files` сканируется рекурсивно и подпапка в нём означает связку, так что
+альбом внутри стал бы «связкой» из одного нечитаемого файла на 200 листов. Сессии
+создаются в
 интерфейсе, видны всем без авторизации (инструмент корпоративный, локализации нет) и
 выполняются **глобальной очередью строго по одной** (`queue_worker.py`) — LM Studio на
 всех один. Поставив сессию в очередь, вкладку можно закрыть: статус, лог и отчёт живут на
@@ -318,4 +394,6 @@ model names, `max_tokens` is response-length only — must stay well under
 (`max_json_repair_attempts`, `max_code_turns`, `timeout_seconds` — safeguards against an
 agent looping forever since Open Interpreter only stops when the model itself decides
 it's done), `extraction.reuse_existing` (skip re-parsing a PDF if its data folder already
-exists), `paths`, `logging.save_raw_agent_json`.
+exists), `paths` (в т.ч. `full_projects_dir` — альбомы целиком; папка сохраняется от
+очистки в `clear_previous_results`, это вход пользователя, а не результат прогона),
+`logging.save_raw_agent_json`.

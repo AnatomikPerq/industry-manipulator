@@ -50,6 +50,14 @@ SHARED_SCRIPTS_DIR = ANALYZER_DIR / "data" / "base_analysis_scripts"
 # .xlsx - для спецификации (единственный документ связки не в PDF).
 ALLOWED_SUFFIXES = {".pdf", ".xlsx", ".xlsm"}
 
+# Пометка "это альбом целиком, а не документ". Стоит в одном ряду с scheme/
+# assembly/spec/netlist в выпадающем списке интерфейса, но означает другое: не
+# вид документа, а контейнер документов. Файл с такой пометкой перед запуском
+# переезжает в full_projects/, где его разбирает full_project.py, а в
+# .doc_types.json пайплайна НЕ уходит - там она была бы бессмысленна, такого
+# типа документа у ingest.py нет.
+FULL_PROJECT_TYPE = "full_project"
+
 # draft     - создана, пользователь докладывает файлы
 # queued    - поставлена в очередь, ждёт воркера
 # running   - выполняется прямо сейчас
@@ -108,6 +116,14 @@ class SessionStore:
             "log": d / "log.txt",
             "data_dir": data,
             "base_files_dir": data / "base_files",
+            # Альбомы целиком (200+ листов). Лежат ВНЕ base_files: тот
+            # сканируется рекурсивно, и подпапка в нём означает связку
+            # (bundles.py), так что альбом внутри стал бы "связкой" из одного
+            # файла, который к тому же не проходит определение типа. Сюда
+            # альбом переносит сам пайплайн, опознав его по числу листов
+            # (full_project.collect_albums) - web_app работает на голой
+            # стандартной библиотеке и открыть PDF не может.
+            "full_projects_dir": data / "full_projects",
             "scripts_dir": data / "base_analysis_scripts",
             "helper_scripts_dir": data / "your_helping_scripts_and_files",
             "output_dir": d / "output",
@@ -144,7 +160,7 @@ class SessionStore:
             session_id = "{}_{}".format(
                 time.strftime("%Y-%m-%d_%H-%M-%S"), uuid.uuid4().hex[:4])
             paths = self.paths_of(session_id)
-            for key in ("base_files_dir", "helper_scripts_dir", "output_dir"):
+            for key in ("base_files_dir", "full_projects_dir", "helper_scripts_dir", "output_dir"):
                 paths[key].mkdir(parents=True, exist_ok=True)
             meta = {
                 "id": session_id,
@@ -238,7 +254,8 @@ class SessionStore:
         import ingest  # импорт здесь: analyzer_to_errors уже в sys.path у сервера
 
         meta = self._read_meta(session_id)
-        base = self.paths_of(session_id)["base_files_dir"]
+        paths = self.paths_of(session_id)
+        base = paths["base_files_dir"]
         overrides = meta.get("doc_types") or {}
         files = []
         if base.is_dir():
@@ -255,6 +272,25 @@ class SessionStore:
                     # связка. Обычно None: все документы прогона - один проект;
                     # имя появляется, только если файлы разложены по подпапкам
                     "bundle": rel.parts[0] if len(rel.parts) > 1 else None,
+                })
+
+        # Альбомы. Показываются вместе с остальными файлами, хотя лежат в другой
+        # папке: для пользователя это такой же загруженный им файл. После
+        # прогона альбом оказывается здесь и в base_files его уже нет - не
+        # перечислив эту папку, интерфейс показал бы, что файл пропал, а рядом
+        # четырнадцать непонятно откуда взявшихся связок.
+        fp_dir = paths["full_projects_dir"]
+        if fp_dir.is_dir():
+            for p in sorted(fp_dir.iterdir()):
+                if not p.is_file() or p.suffix.lower() != ".pdf":
+                    continue
+                if p.name.startswith("~$") or p.name.startswith("."):
+                    continue
+                files.append({
+                    "name": p.name,
+                    "size": p.stat().st_size,
+                    "detected_type": FULL_PROJECT_TYPE,
+                    "bundle": None,
                 })
         return files
 
@@ -278,10 +314,14 @@ class SessionStore:
         meta = self._read_meta(session_id)
         if meta["status"] in ACTIVE_STATUSES:
             raise SessionError("Сессия в очереди или выполняется - файлы менять нельзя", 409)
-        base = self.paths_of(session_id)["base_files_dir"]
+        paths = self.paths_of(session_id)
         name = Path(filename).name
         target = None
-        for p in base.rglob("*"):           # файл может лежать в подпапке-связке
+        # base_files рекурсивно (файл может лежать в подпапке-связке), затем
+        # full_projects: после прогона альбом лежит там, и не заглянув сюда,
+        # удалить его из интерфейса было бы нельзя вовсе.
+        for p in list(paths["base_files_dir"].rglob("*")) + \
+                list(paths["full_projects_dir"].glob("*")):
             if p.is_file() and p.name == name:
                 target = p
                 break
@@ -370,7 +410,7 @@ class SessionStore:
         а в архиве сессии остаётся та версия парсеров, которой её считали.
         """
         paths = self.paths_of(session_id)
-        for key in ("base_files_dir", "helper_scripts_dir", "output_dir"):
+        for key in ("base_files_dir", "full_projects_dir", "helper_scripts_dir", "output_dir"):
             paths[key].mkdir(parents=True, exist_ok=True)
 
         if SHARED_SCRIPTS_DIR.is_dir():
@@ -378,12 +418,26 @@ class SessionStore:
                             dirs_exist_ok=True,
                             ignore=shutil.ignore_patterns("__pycache__"))
 
-        # пометки типов - туда, где их ищет ingest (data/.doc_types.json)
         meta = self._read_meta(session_id)
+        doc_types = dict(meta.get("doc_types") or {})
+
+        # Файлы, помеченные как альбом, переезжают в full_projects/ - там их
+        # ждёт full_project.py. Пайплайн опознаёт альбом и сам (по числу
+        # листов), но пометка пользователя главнее: она снимает догадку и
+        # работает даже на альбоме короче порога.
+        for name in [n for n, t in doc_types.items() if t == FULL_PROJECT_TYPE]:
+            src = paths["base_files_dir"] / name
+            if src.is_file():
+                shutil.move(str(src), str(paths["full_projects_dir"] / name))
+            # в .doc_types.json такая пометка не уезжает: у ingest.py нет
+            # типа документа "full_project", и файл с ним осел бы в
+            # skipped_files с невнятной причиной
+            doc_types.pop(name, None)
+
+        # пометки типов - туда, где их ищет ingest (data/.doc_types.json)
         sidecar = paths["data_dir"] / ".doc_types.json"
         sidecar.write_text(
-            json.dumps(meta.get("doc_types") or {}, ensure_ascii=False, indent=2),
-            encoding="utf-8")
+            json.dumps(doc_types, ensure_ascii=False, indent=2), encoding="utf-8")
         return paths
 
     def cleanup_after_cancel(self, session_id) -> None:

@@ -134,12 +134,28 @@ DOC_TYPES = {
                        "её сотни тысяч примитивов и для поиска ошибок она бесполезна.",
     },
     "spec": {
+        # Парсер выбирается по расширению (см. _scripts_for): книга Excel и
+        # лист альбома - один и тот же документ по ГОСТ 21.110, но читаются
+        # они принципиально разным кодом (openpyxl против разбора линовки
+        # таблицы в PDF). Запускать оба на одном файле бессмысленно: тот, чей
+        # формат не совпал, просто упадёт.
         "scripts": ["specification_to_json.py"],
-        "description": "Спецификация оборудования (СО, xlsx) по ГОСТ 21.110: "
-                       "построчный перечень заказываемых изделий - позиция, "
-                       "наименование, код оборудования, количество.",
+        "scripts_by_suffix": {
+            ".pdf": ["specification_pdf_to_json.py"],
+        },
+        "description": "Спецификация оборудования (СО) по ГОСТ 21.110: построчный "
+                       "перечень заказываемых изделий - позиция, наименование, код "
+                       "оборудования, количество. Приходит книгой Excel (отдельный "
+                       "комплект на шкаф) либо листом PDF (в составе полного проекта).",
     },
 }
+
+
+def _scripts_for(doc_type: str, source: Path) -> list:
+    """Какими парсерами читать документ этого типа в этом формате."""
+    entry = DOC_TYPES[doc_type]
+    by_suffix = entry.get("scripts_by_suffix") or {}
+    return by_suffix.get(source.suffix.lower(), entry["scripts"])
 
 # .xlsx нужен спецификации: это единственный документ связки, который приходит
 # не чертежом, а книгой Excel.
@@ -152,7 +168,9 @@ TYPE_SUFFIXES = {
     "scheme": {".pdf"},
     "netlist": {".pdf"},
     "assembly": {".pdf"},
-    "spec": {".xlsx", ".xlsm"},
+    # .pdf у спецификации появился вместе с полными проектами: в альбоме она
+    # такой же лист, как схема, и книги Excel к ней не прилагается.
+    "spec": {".xlsx", ".xlsm", ".pdf"},
 }
 
 
@@ -322,7 +340,7 @@ def _extraction_warnings(script: str, stats: dict, cumulative_stats: dict) -> li
             warnings.append("в таблице подключений не найдено ни одной строки "
                             "соединения - проверьте формат/качество PDF")
 
-    elif script == "specification_to_json.py":
+    elif script in ("specification_to_json.py", "specification_pdf_to_json.py"):
         if stats.get("spec_rows", 0) == 0:
             warnings.append("в спецификации не найдено ни одной позиции - проверьте, "
                             "та ли это книга и не пуст ли первый лист")
@@ -357,7 +375,7 @@ def extract_document(doc: dict, scripts_dir: Path, data_dir: Path,
     записывается в статус документа."""
     out_dir = data_dir / doc["name"]
 
-    scripts = DOC_TYPES[doc["doc_type"]]["scripts"]
+    scripts = _scripts_for(doc["doc_type"], doc["source"])
 
     record = {
         "name": doc["name"],

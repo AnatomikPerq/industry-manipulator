@@ -35,6 +35,7 @@ from pathlib import Path
 
 import yaml
 
+import full_project
 from ingest import ExtractionError, run_extraction
 from llm_check import check_server_alive, run_checks
 from oi_agent import run_analysis_agent
@@ -194,6 +195,23 @@ def run_extraction_stage(cfg: dict, doc_types: dict = None,
     общему префиксу имени файла (см. bundles.py).
     """
     paths = cfg["paths"]
+
+    # Альбомы целиком режутся на отдельные документы ДО извлечения: базовый
+    # парсер рассчитан на документ одного вида, а у листа внутри альбома нет
+    # имени файла, по которому пайплайн определяет тип. Части выкладываются в
+    # base_files/<шкаф>/, после чего всё идёт обычным путём.
+    if paths.get("full_projects_dir"):
+        reports = full_project.split_full_projects(
+            full_projects_dir=resolve_path(paths["full_projects_dir"]),
+            base_files_dir=resolve_path(paths["base_files_dir"]),
+            scripts_dir=resolve_path(paths["scripts_dir"]),
+        )
+        for rep in reports:
+            logger.info("Полный проект %s: %d листов -> %d документов "
+                        "(%d частей не анализируется)",
+                        rep["source_file"], rep["total_pages"],
+                        len(rep["parts_written"]), len(rep["parts_skipped"]))
+
     overrides = doc_types or load_type_overrides(cfg)
     return run_extraction(
         base_files_dir=resolve_path(paths["base_files_dir"]),
@@ -280,9 +298,19 @@ def run_rules_stage(cfg: dict, data_dir: Path) -> list:
                            doc["name"], data_file)
             continue
 
+        # Спецификация из связки "общие документы" описывает ВЕСЬ объект, а не
+        # шкаф: часть правил на ней неприменима (см. SINGLE_CABINET_ONLY_RULES
+        # в spec_rules.py). Флаг ставится только спецификации - остальные
+        # чекеры такого параметра не принимают, а в общей связке лежит ещё и
+        # кабельный журнал.
+        kwargs = {}
+        if (doc.get("doc_type") == "spec"
+                and doc.get("bundle") == full_project.COMMON_BUNDLE_DIR):
+            kwargs["project_wide"] = True
+
         try:
             module = _load_parser_module(scripts_dir, script)
-            doc_findings = getattr(module, func_name)(doc["name"], str(data_path))
+            doc_findings = getattr(module, func_name)(doc["name"], str(data_path), **kwargs)
         except Exception as e:  # noqa: BLE001 - падение чекера не должно ронять прогон
             logger.error("  %s: чекер %s упал: %s", doc["name"], script, e)
             continue
@@ -291,6 +319,36 @@ def run_rules_stage(cfg: dict, data_dir: Path) -> list:
                     doc["name"], doc["doc_type"], len(doc_findings))
         findings.extend(doc_findings)
     return findings
+
+
+def _lend_project_wide_docs(groups: dict) -> None:
+    """Одолжить спецификацию всего объекта каждой связке-шкафу.
+
+    В полном проекте спецификация одна на весь объект и шкафа в наименовании не
+    называет, поэтому попадает в связку "общие документы"
+    (full_project.COMMON_BUNDLE_DIR). Без этого шага у связок-шкафов нет
+    спецификации ВООБЩЕ, а значит вся сверка по связке молча не выполняется -
+    и самые дорогие ошибки (изделие нарисовано, но не заказано) на альбоме не
+    ищутся, хотя ровно ради них всё и затевалось.
+
+    Одолженная спецификация помечается project_wide: она описывает ВЕСЬ объект,
+    и направление сверки "строка спецификации -> её нет на чертеже" по ней
+    бессмысленно (в спецификации штатно лежит оборудование остальных двенадцати
+    шкафов). Обратное направление - "обозначение есть на чертеже и схеме, но в
+    спецификации его нет" - остаётся верным и работает.
+    """
+    common = groups.get(full_project.COMMON_BUNDLE_DIR)
+    if not common or "spec" not in common:
+        return
+
+    for bundle, docs in groups.items():
+        if bundle == full_project.COMMON_BUNDLE_DIR or "spec" in docs:
+            continue
+        if not any(t in docs for t in ("assembly", "scheme")):
+            continue
+        docs["spec"] = dict(common["spec"], project_wide=True)
+        logger.info("Связка %r: подключена общая спецификация объекта (%s)",
+                    bundle, common["spec"]["name"])
 
 
 def run_bundle_stage(cfg: dict, data_dir: Path) -> list:
@@ -340,6 +398,8 @@ def run_bundle_stage(cfg: dict, data_dir: Path) -> list:
             "data_dir": str(PROJECT_ROOT / doc["data_dir"]),
             "source": doc.get("source_file"),
         }
+
+    _lend_project_wide_docs(groups)
 
     findings = []
     for bundle, docs in groups.items():
@@ -469,6 +529,9 @@ def clear_previous_results(cfg: dict) -> None:
         resolve_path(cfg["paths"]["base_files_dir"]).name,
         resolve_path(cfg["paths"]["scripts_dir"]).name,
         resolve_path(cfg["paths"]["helper_scripts_dir"]).name,
+        # альбомы целиком - тоже вход пользователя, а не результат прогона
+        resolve_path(cfg["paths"].get("full_projects_dir")
+                     or "./data/full_projects").name,
     }
     if data_dir.exists():
         for item in data_dir.iterdir():

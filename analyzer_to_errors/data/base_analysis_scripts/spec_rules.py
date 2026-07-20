@@ -152,6 +152,12 @@ def rule_duplicate_code(document, doc):
     это не ошибка - но по такой спецификации НЕЛЬЗЯ понять, сколько изделий
     заказывать: 21 или 19. Поэтому REVIEW, а не ошибка: вопрос инженеру, а не
     приговор документу.
+
+    ТОЛЬКО ДЛЯ СПЕЦИФИКАЦИИ ОДНОГО ШКАФА (см. SINGLE_CABINET_ONLY_RULES). В
+    спецификации полного проекта один артикул в нескольких строках - норма, а
+    не ревизия: один и тот же автомат стоит в десятке разных щитов, и каждый
+    щит занимает свои строки. Замер на "24-051-ЭОМ": 112 находок на 837 строк,
+    все до одной ложные.
     """
     by_code = defaultdict(list)
     for it in doc.get("items", []):
@@ -197,18 +203,27 @@ ALL_RULES = [
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
-def check_specification(document, doc):
+# Правила, которые верны только для спецификации ОДНОГО шкафа. В полном проекте
+# спецификация одна на весь объект (полтора десятка щитов), и предпосылка этих
+# правил там не выполняется - см. комментарий в rule_duplicate_code.
+SINGLE_CABINET_ONLY_RULES = (rule_duplicate_code,)
+
+
+def check_specification(document, doc, project_wide=False):
     findings = []
     for rule in ALL_RULES:
+        if project_wide and rule in SINGLE_CABINET_ONLY_RULES:
+            continue
         findings.extend(rule(document, doc))
     findings.sort(key=lambda f: SEVERITY_ORDER.get(f["severity"], 9))
     return findings
 
 
-def check_specification_file(document, spec_path):
+def check_specification_file(document, spec_path, project_wide=False):
+    """project_wide: спецификация описывает весь объект, а не один шкаф."""
     with open(spec_path, encoding="utf-8") as f:
         doc = json.load(f)
-    return check_specification(document, doc)
+    return check_specification(document, doc, project_wide=project_wide)
 
 
 def main():

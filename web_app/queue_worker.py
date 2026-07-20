@@ -192,6 +192,7 @@ class AnalysisQueue:
             "session_config_path": str(paths["config"]),
             "paths": {
                 "base_files_dir": str(paths["base_files_dir"]),
+                "full_projects_dir": str(paths["full_projects_dir"]),
                 "scripts_dir": str(paths["scripts_dir"]),
                 "helper_scripts_dir": str(paths["helper_scripts_dir"]),
                 "input_dir": str(paths["data_dir"]),

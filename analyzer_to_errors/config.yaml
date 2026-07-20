@@ -75,6 +75,7 @@ extraction:
 # текущей директории запуска.
 paths:
   base_files_dir: "./data/base_files"                  # PDF, загруженные пользователем
+  full_projects_dir: "./data/full_projects"            # альбомы целиком (200+ листов): режутся на документы в base_files/<шкаф>/
   scripts_dir: "./data/base_analysis_scripts"          # базовые скрипты-парсеры
   helper_scripts_dir: "./data/your_helping_scripts_and_files"  # рабочая папка агента
   input_dir: "./data"                                  # песочница агента: сюда парсеры кладут data/<имя документа>/
