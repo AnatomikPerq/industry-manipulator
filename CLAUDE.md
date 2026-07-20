@@ -35,7 +35,8 @@ origin main`) unless the user says otherwise for a specific commit.
 связку, если нужных им документов нет.
 
 Two top-level pieces:
-- `web_app/` — локальный веб-интерфейс (stdlib `http.server`, без зависимостей): загрузка PDF, запуск/отмена анализа, просмотр отчёта.
+- `web_app/` — локальный веб-интерфейс (stdlib `http.server`, без зависимостей): **сессии**
+  анализа, очередь, загрузка PDF, запуск/отмена, просмотр отчёта.
 - `analyzer_to_errors/` — сам пайплайн анализа (ядро). Has its own [README](analyzer_to_errors/README.md) with the detailed data-format spec.
 
 ## Commands
@@ -259,17 +260,51 @@ errors vanish from the report.
 
 ### `web_app/` — the local UI
 
-`server.py` is a `BaseHTTPRequestHandler` (stdlib only, no framework) exposing
-`/api/config`, `/api/files`, `/api/upload`, `/api/analyze`, `/api/status`, `/api/cancel`,
-`/api/set-type`, `/api/report`, `/api/check-llm`, plus static file serving. Analysis runs
-as a **separate subprocess** (`_pipeline_runner.py`, invoked as `python -m` with a JSON
-args file), not a thread — this is what lets Cancel kill the whole process tree instantly
-and unconditionally, since a network call to the LLM or Open Interpreter itself might
-ignore a cooperative stop signal. The runner writes log lines to stdout (relayed live to
-the browser console) and a `<args>.result.json` sidecar with `{"ok", "error", "n_findings"}`.
+Единица работы интерфейса — **СЕССИЯ** (`sessions.py`): комплект документов одного шкафа
+плюс её прогон и её отчёт, со своей папкой `analyzer_to_errors/sessions/<id>/`
+(`session.json`, `config.yaml`, `log.txt`, `data/`, `output/`). Сессии создаются в
+интерфейсе, видны всем без авторизации (инструмент корпоративный, локализации нет) и
+выполняются **глобальной очередью строго по одной** (`queue_worker.py`) — LM Studio на
+всех один. Поставив сессию в очередь, вкладку можно закрыть: статус, лог и отчёт живут на
+диске, а не в памяти процесса или браузера.
 
-Completed runs get archived under `story/<document-set-name>/<timestamp>/` (see
-`_archive_run` in `server.py`).
+**Изоляция сессий сделана путями, а не правками пайплайна.** `_pipeline_runner.py`
+собирает `config.yaml` сессии — копию базового, где весь раздел `paths` заменён на
+абсолютные пути её папки, — и передаёт его в нетронутый `run_pipeline`. Отсюда следует
+главное ограничение: **папка сессии обязана лежать внутри `analyzer_to_errors/`**, потому
+что `ingest.py` пишет пути документов в манифест через `relative_to(PROJECT_ROOT)`, а
+`main.py` собирает их обратно как `PROJECT_ROOT / doc["data_dir"]`; сессия на другом диске
+уронит извлечение невнятным `ValueError`. `base_analysis_scripts` копируется в каждую
+сессию (`prepare_run`), а не шарится: промпт агента описывает её как подпапку своей
+песочницы `data/`, и `clear_previous_results` сохраняет служебные папки по `.name` из
+`config.paths` — с копией обе вещи работают без правок. `known_errors.json` остаётся общим
+для всех сессий: это накопленное знание, а не результат прогона.
+
+Эндпоинты: `/api/config`, `/api/check-llm`, `/api/sessions` (список + состояние очереди,
+POST — создать) и `/api/sessions/<id>/{rename,delete,upload,file-delete,set-type,enqueue,
+cancel,log,report}`. Лог отдаётся порциями (`log?since=N`), а не целиком на каждый опрос.
+Пометки типа документа хранятся в `session.json` и уезжают в `data/.doc_types.json` сессии
+только перед запуском — общий сайдкар был один на весь сервер и ключевался голым именем
+файла, из-за чего две сессии спорили за одну запись.
+
+Анализ по-прежнему исполняется **отдельным подпроцессом** (`_pipeline_runner.py` с JSON
+args-файлом), а не потоком — только так отмена убивает всё дерево процессов мгновенно и
+безусловно: сетевой вызов к LLM или сам Open Interpreter кооперативный сигнал вполне
+может проигнорировать. Раннер пишет лог в stdout (воркер ретранслирует его в `log.txt`) и
+сайдкар `<args>.result.json` с `{"ok", "error", "n_findings"}`.
+
+Статусы сессии: `draft` → `queued` → `running` → `done` | `error` | `cancelled` |
+`interrupted`. Последний ставится на старте сервера тем сессиям, что были `running`:
+их процесс умер вместе с прежним сервером. Автоматически они НЕ перезапускаются —
+пользователь мог перезапустить сервер именно ради остановки прогона; `queued` при этом
+возвращаются в очередь в порядке `queued_at`.
+
+Папка сессии сама и есть архив прогона, поэтому прежнее копирование результатов в
+`story/<имя>/<дата>/` удалено. Старые папки `story/` остались лежать — их, как и раньше,
+никто не читает.
+
+CLI (`python main.py …`) сессий не знает и продолжает работать по общему
+`analyzer_to_errors/data/` — быстрый цикл отладки чекеров не изменился.
 
 ### Config (`analyzer_to_errors/config.yaml`)
 

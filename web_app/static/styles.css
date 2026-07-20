@@ -327,3 +327,71 @@ td.action  { min-width: 220px; white-space: normal; color: #34404b; }
 .no-issues { padding: 22px; text-align: center; color: var(--low); font-size: 15px; background: #f0faf3; border-radius: 6px; }
 
 .hint-text { color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+/* ============================================================
+   Экраны: список сессий и одна сессия (hash-роутинг в app.js)
+   ============================================================ */
+.view { display: none; }
+.view.show { display: block; }
+
+.card > .card-head .head-action { margin-left: auto; padding: 7px 14px; font-size: 13px; }
+
+/* ---------- Список сессий ---------- */
+.queue-note { color: var(--muted); font-size: 12.5px; margin-bottom: 12px; }
+
+.session-list { display: flex; flex-direction: column; gap: 8px; }
+.session-card {
+  display: flex; align-items: center; gap: 12px;
+  border: 1px solid var(--line); border-radius: 6px; padding: 11px 13px; background: var(--panel);
+}
+.session-card .sc-main { flex: 1; min-width: 0; }
+.session-card .sc-name {
+  display: inline-block; font-size: 14px; font-weight: 600; color: var(--ink);
+  text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+}
+.session-card .sc-name:hover { color: var(--blue); text-decoration: underline; }
+.session-card .sc-meta {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  color: var(--muted); font-size: 12px; margin-top: 4px;
+}
+.session-card .sc-findings b { color: var(--ink); }
+.session-card .sc-error { color: var(--crit); font-size: 12px; margin-top: 4px; }
+.session-card .sc-actions { display: flex; gap: 6px; flex: none; }
+
+/* ---------- Бейдж статуса сессии ---------- */
+.status-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 11.5px; font-weight: 600; border: 1px solid transparent;
+}
+.st-draft       { background: #eef1f4; color: var(--info);   border-color: var(--line); }
+.st-queued      { background: var(--orange-soft); color: var(--orange-dark); border-color: #f6d4b0; }
+.st-running     { background: var(--blue-soft);   color: var(--blue-dark);   border-color: var(--blue-line); }
+.st-done        { background: #f0faf3; color: var(--low);  border-color: #c4e6cd; }
+.st-error       { background: #fdecec; color: var(--crit); border-color: #f3c6c2; }
+.st-cancelled   { background: #eef1f4; color: var(--info); border-color: var(--line); }
+.st-interrupted { background: #fdecec; color: var(--crit); border-color: #f3c6c2; }
+
+/* ---------- Хлебные крошки экрана сессии ---------- */
+.crumbs { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.crumbs a { color: var(--blue); text-decoration: none; font-size: 13px; }
+.crumbs a:hover { text-decoration: underline; }
+.crumbs .crumb-sep { color: var(--muted); }
+.crumbs .crumb-name { font-weight: 650; font-size: 15px; }
+.crumbs .crumb-btn { margin-left: auto; padding: 5px 10px; font-size: 12px; }
+
+/* кнопка удаления файла из сессии */
+.file-item .fi-del {
+  flex: none; border: 1px solid var(--line); background: var(--paper); color: var(--muted);
+  border-radius: 5px; width: 26px; height: 26px; line-height: 1; cursor: pointer; font-size: 12px;
+}
+.file-item .fi-del:hover:not(:disabled) { background: #fdecec; color: var(--crit); border-color: #f3c6c2; }
+.file-item .fi-del:disabled { opacity: .4; cursor: not-allowed; }
+
+/* форма создания сессии (раскрывается кнопкой «Новая сессия») */
+.new-session { display: flex; gap: 8px; margin-bottom: 12px; }
+.new-session.hidden { display: none; }
+.new-session input {
+  flex: 1; min-width: 0; padding: 9px 11px; font-size: 13px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink);
+}
+.new-session input:focus { outline: none; border-color: var(--blue); background: var(--paper); }

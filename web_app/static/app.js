@@ -1,14 +1,31 @@
 /* ============================================================
-   Анализатор EPLAN-схем - фронтенд
+   Анализатор проектной документации - фронтенд
+
+   Два экрана на hash-роутинге, без фреймворка и сборки:
+     #/        - список сессий (общий для всех, обновляется сам)
+     #/s/<id>  - одна сессия: файлы, запуск, консоль, отчёт
+
+   Состояние сессии живёт на сервере, в session.json, а не во вкладке:
+   вкладку можно закрыть, сессия останется в очереди и досчитается.
    ============================================================ */
 
 const $ = (id) => document.getElementById(id);
 let DOC_TYPES = [];          // список принимаемых типов (с бэкенда)
-let FILES = [];              // [{name, size, type}] - выбранные пользователем
-let statusTimer = null;
+
+// Текущая открытая сессия. files - её файлы, logNext - номер строки лога,
+// на которой мы остановились (лог тянем порциями, а не целиком).
+let S = { id: null, meta: null, files: [], logNext: 0 };
+let sessionTimer = null;     // поллинг открытой сессии
+let listTimer = null;        // автообновление списка сессий
+
+const STATUS_LABELS = {
+  draft: "черновик", queued: "в очереди", running: "выполняется",
+  done: "готово", error: "ошибка", cancelled: "отменена",
+  interrupted: "прервана",
+};
 
 // ------------------------------------------------------------
-// Инициализация
+// Инициализация и роутинг
 // ------------------------------------------------------------
 async function init() {
   try {
@@ -17,16 +34,38 @@ async function init() {
     $("version-badge").textContent = cfg.version;
     $("meta-version").textContent = cfg.version;
     $("footer-version").textContent = cfg.version;
-    renderDocTypes(cfg);
+    renderDocTypes();
   } catch (e) {
     logLine("Не удалось загрузить конфигурацию: " + e.message, "err");
   }
-  await refreshFiles();
   bindEvents();
-  await restoreState();   // восстановить консоль/статус/отчёт после перезагрузки
+  window.addEventListener("hashchange", route);
+  await route();
 }
 
-function renderDocTypes(cfg) {
+async function route() {
+  stopTimers();
+  const m = location.hash.match(/^#\/s\/([^/]+)/);
+  if (m) {
+    await openSession(decodeURIComponent(m[1]));
+  } else {
+    showView("list");
+    await refreshSessions();
+    listTimer = setInterval(refreshSessions, 2000);
+  }
+}
+
+function showView(which) {
+  $("view-list").classList.toggle("show", which === "list");
+  $("view-session").classList.toggle("show", which === "session");
+}
+
+function stopTimers() {
+  if (listTimer) { clearInterval(listTimer); listTimer = null; }
+  if (sessionTimer) { clearInterval(sessionTimer); sessionTimer = null; }
+}
+
+function renderDocTypes() {
   $("doc-types").innerHTML = DOC_TYPES.map((t) => `
     <li>
       <span class="dot"></span>
@@ -37,51 +76,220 @@ function renderDocTypes(cfg) {
     </li>`).join("");
 }
 
-// После перезагрузки страницы состояние анализа хранится на сервере (в памяти
-// процесса): восстанавливаем консоль, статус и, если анализ уже завершён, отчёт.
-// Если анализ ещё идёт - подхватываем опрос статуса, не теряя лог.
-async function restoreState() {
-  let s;
-  try { s = await fetchJSON("/api/status"); } catch { return; }
-  if (s.stage === "idle") return;
+// ------------------------------------------------------------
+// Экран 1: список сессий
+// ------------------------------------------------------------
+async function refreshSessions() {
+  let data;
+  try { data = await fetchJSON("/api/sessions"); }
+  catch { return; }   // сеть моргнула - подождём следующего тика
 
-  $("console").innerHTML = "";
-  for (const line of s.log) logLine(line, classifyLog(line));
+  const list = $("session-list");
+  const empty = $("session-empty");
+  const sessions = data.sessions || [];
+  empty.style.display = sessions.length ? "none" : "block";
 
-  if (s.running) {
-    setStatus(`Идёт анализ… (режим: ${s.mode === "scripts" ? "без ИИ" : "полный"})`, true);
-    resumePolling(s.log.length);
-  } else if (s.stage === "cancelled") {
-    setStatus("Прошлый анализ был отменён", false, "err");
-  } else if (s.stage === "error") {
-    setStatus("Прошлый анализ завершился с ошибкой", false, "err");
-  } else if (s.stage === "done") {
-    setStatus(`Анализ завершён. Замечаний: ${s.n_findings ?? "?"}`, false, "ok");
-    await showReport();
-  }
+  const nQueued = (data.queued || []).length;
+  $("queue-note").textContent = data.running_id
+    ? `Сейчас выполняется одна сессия${nQueued ? `, в очереди ещё ${nQueued}` : ""}.`
+    : (nQueued ? `В очереди сессий: ${nQueued}.` : "Очередь пуста.");
+
+  list.innerHTML = sessions.map(renderSessionCard).join("");
+  list.querySelectorAll("[data-act]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const { act, id } = e.currentTarget.dataset;
+      if (act === "open") location.hash = "#/s/" + encodeURIComponent(id);
+      if (act === "cancel") cancelSession(id, refreshSessions);
+      if (act === "delete") deleteSession(id);
+    });
+  });
 }
 
-// ------------------------------------------------------------
-// Файлы: загрузка, отображение, выбор типа
-// ------------------------------------------------------------
-async function refreshFiles() {
+function renderSessionCard(s) {
+  const status = statusBadge(s);
+  const findings = s.n_findings != null
+    ? `<span class="sc-findings">замечаний: <b>${s.n_findings}</b></span>` : "";
+  const when = s.finished_at || s.started_at || s.created_at;
+  const canCancel = s.status === "queued" || s.status === "running";
+  return `
+    <div class="session-card">
+      <div class="sc-main">
+        <a class="sc-name" href="#/s/${encodeURIComponent(s.id)}"
+           data-act="open" data-id="${esc(s.id)}">${esc(s.name)}</a>
+        <div class="sc-meta">
+          ${status}
+          <span>файлов: ${s.n_files}</span>
+          ${findings}
+          <span class="sc-time">${fmtTime(when)}</span>
+        </div>
+        ${s.error ? `<div class="sc-error">${esc(s.error)}</div>` : ""}
+      </div>
+      <div class="sc-actions">
+        <button class="btn" data-act="open" data-id="${esc(s.id)}">Открыть</button>
+        ${canCancel
+          ? `<button class="btn btn-cancel" data-act="cancel" data-id="${esc(s.id)}">Отменить</button>`
+          : `<button class="btn btn-ghost" data-act="delete" data-id="${esc(s.id)}">Удалить</button>`}
+      </div>
+    </div>`;
+}
+
+function statusBadge(s) {
+  const label = s.status === "queued" && s.queue_position
+    ? `в очереди, ${s.queue_position}-я`
+    : (STATUS_LABELS[s.status] || s.status);
+  return `<span class="status-badge st-${esc(s.status)}">${esc(label)}</span>`;
+}
+
+function toggleNewSession(on) {
+  $("new-session").classList.toggle("hidden", !on);
+  if (on) { $("new-session-name").value = ""; $("new-session-name").focus(); }
+}
+
+async function createSession() {
+  const name = $("new-session-name").value.trim();
   try {
-    const data = await fetchJSON("/api/files");
-    FILES = data.files.map((f) => ({
-      name: f.name, size: f.size, type: f.detected_type || "",
-      bundle: f.bundle || "",
-    }));
+    const meta = await fetchJSON("/api/sessions", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    location.hash = "#/s/" + encodeURIComponent(meta.id);
   } catch (e) {
-    FILES = [];
+    alert("Не удалось создать сессию: " + e.message);
   }
-  renderFiles();
 }
 
+async function deleteSession(id) {
+  if (!confirm("Удалить сессию вместе с её файлами и отчётом? Отменить это нельзя.")) return;
+  try {
+    await fetchJSON(`/api/sessions/${encodeURIComponent(id)}/delete`, { method: "POST" });
+    if (S.id === id) location.hash = "#/";
+    else await refreshSessions();
+  } catch (e) {
+    alert("Не удалось удалить: " + e.message);
+  }
+}
+
+// Отмена и из очереди, и на ходу - сервер сам разбирается, что именно делать.
+async function cancelSession(id, after) {
+  try {
+    await fetchJSON(`/api/sessions/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+  } catch (e) {
+    alert("Не удалось отменить: " + e.message);
+  }
+  if (after) await after();
+}
+
+// ------------------------------------------------------------
+// Экран 2: одна сессия
+// ------------------------------------------------------------
+async function openSession(id) {
+  S = { id, meta: null, files: [], logNext: 0 };
+  $("console").innerHTML = "";
+  $("report-section").classList.remove("show");
+  $("llm-panel").classList.remove("show");
+  showView("session");
+
+  try {
+    await loadSession();
+  } catch (e) {
+    alert("Сессия не открывается: " + e.message);
+    location.hash = "#/";
+    return;
+  }
+
+  // лог и отчёт восстанавливаем с сервера: он на диске, а не в памяти вкладки
+  await pumpLog();
+  if (S.meta.status === "done") await showReport();
+  if (isBusy()) startSessionPolling();
+}
+
+async function loadSession() {
+  const meta = await fetchJSON(`/api/sessions/${encodeURIComponent(S.id)}`);
+  S.meta = meta;
+  S.files = (meta.files || []).map((f) => ({
+    name: f.name, size: f.size, type: f.detected_type || "", bundle: f.bundle || "",
+  }));
+  $("crumb-name").textContent = meta.name;
+  $("crumb-status").outerHTML = statusBadge(meta).replace(
+    "<span ", '<span id="crumb-status" ');
+  renderFiles();
+  renderSessionStatus();
+}
+
+function isBusy() {
+  return S.meta && (S.meta.status === "queued" || S.meta.status === "running");
+}
+
+function renderSessionStatus() {
+  const m = S.meta;
+  if (!m) return;
+  if (m.status === "queued") {
+    setStatus(m.queue_position
+      ? `В очереди, ${m.queue_position}-я. Можно закрыть вкладку.`
+      : "В очереди. Можно закрыть вкладку.", true);
+    showCancel(true);
+  } else if (m.status === "running") {
+    setStatus(`Идёт анализ… (режим: ${m.mode === "scripts" ? "без ИИ" : "полный"})`, true);
+    showCancel(true);
+  } else {
+    showCancel(false);
+    if (m.status === "done") {
+      setStatus(`Анализ завершён. Замечаний: ${m.n_findings ?? "?"}`, false, "ok");
+    } else if (m.status === "error") {
+      setStatus("Анализ завершился с ошибкой: " + (m.error || ""), false, "err");
+    } else if (m.status === "cancelled") {
+      setStatus("Сессия отменена", false, "err");
+    } else if (m.status === "interrupted") {
+      setStatus("Прогон прерван перезапуском сервера — запустите заново", false, "err");
+    } else {
+      setStatus("Готово к запуску", false);
+    }
+  }
+  updateRunEnabled();
+}
+
+// Лог тянем по смещению: сервер отдаёт только строки, которых у нас ещё нет.
+async function pumpLog() {
+  let data;
+  try { data = await fetchJSON(`/api/sessions/${encodeURIComponent(S.id)}/log?since=${S.logNext}`); }
+  catch { return null; }
+  for (const line of data.lines) logLine(line, classifyLog(line));
+  S.logNext = data.next;
+  return data;
+}
+
+function startSessionPolling() {
+  if (sessionTimer) clearInterval(sessionTimer);
+  sessionTimer = setInterval(async () => {
+    const data = await pumpLog();
+    if (!data) return;
+    const wasStatus = S.meta.status;
+    Object.assign(S.meta, {
+      status: data.status, error: data.error,
+      n_findings: data.n_findings, queue_position: data.queue_position,
+    });
+    if (data.status !== wasStatus) {
+      $("crumb-status").outerHTML = statusBadge(S.meta).replace(
+        "<span ", '<span id="crumb-status" ');
+    }
+    renderSessionStatus();
+    if (!isBusy()) {
+      clearInterval(sessionTimer);
+      sessionTimer = null;
+      if (data.status === "done") await showReport();
+    }
+  }, 1000);
+}
+
+// ------------------------------------------------------------
+// Файлы сессии: загрузка, отображение, выбор типа
+// ------------------------------------------------------------
 function renderFiles() {
   const list = $("file-list");
   const empty = $("file-empty");
   const note = $("file-note");
-  if (FILES.length === 0) {
+  if (S.files.length === 0) {
     list.innerHTML = "";
     empty.style.display = "block";
     note.classList.remove("show");
@@ -90,14 +298,15 @@ function renderFiles() {
   }
   empty.style.display = "none";
   note.classList.add("show");
-  list.innerHTML = FILES.map((f, i) => {
+  const locked = isBusy();
+  list.innerHTML = S.files.map((f, i) => {
     const opts = ['<option value="">— укажите тип —</option>']
       .concat(DOC_TYPES.map((t) =>
         `<option value="${t.key}" ${f.type === t.key ? "selected" : ""}>${esc(t.title)}</option>`))
       .join("");
     // Связку показываем, ТОЛЬКО если файл лежит в подпапке: в обычном случае
-    // все загруженные документы - один проект, и подпись "проект" на каждой
-    // строке ничего не сообщает (об этом сказано один раз под списком).
+    // все документы сессии - один проект, и подпись "проект" на каждой строке
+    // ничего не сообщает (об этом сказано один раз под списком).
     const bundle = f.bundle
       ? `<span class="fi-bundle" title="Отдельная связка (подпапка): ${esc(f.bundle)}">${esc(f.bundle)}</span>`
       : "";
@@ -107,27 +316,32 @@ function renderFiles() {
         <span class="fi-name" title="${esc(f.name)}">${esc(f.name)}</span>
         ${bundle}
         <span class="fi-size">${fmtSize(f.size)}</span>
-        <select data-idx="${i}" class="${f.type ? "" : "unset"}">${opts}</select>
+        <select data-idx="${i}" class="${f.type ? "" : "unset"}" ${locked ? "disabled" : ""}>${opts}</select>
+        <button class="fi-del" data-del="${i}" title="Удалить файл из сессии"
+                ${locked ? "disabled" : ""}>✕</button>
       </li>`;
   }).join("");
 
   list.querySelectorAll("select").forEach((sel) => {
     sel.addEventListener("change", (e) => {
       const idx = +e.target.dataset.idx;
-      FILES[idx].type = e.target.value;
+      S.files[idx].type = e.target.value;
       e.target.classList.toggle("unset", !e.target.value);
       updateRunEnabled();
-      saveType(FILES[idx].name, e.target.value);
+      saveType(S.files[idx].name, e.target.value);
     });
+  });
+  list.querySelectorAll("[data-del]").forEach((btn) => {
+    btn.addEventListener("click", () => deleteFile(S.files[+btn.dataset.del].name));
   });
   updateRunEnabled();
 }
 
-// Сохраняет выбор типа на сервере сразу при изменении, чтобы пометка пережила
-// перезагрузку страницы (раньше тип жил только в памяти вкладки браузера).
+// Тип сохраняем на сервере сразу при изменении: пометка живёт в session.json и
+// переживает и перезагрузку страницы, и переход в список сессий и обратно.
 async function saveType(name, type) {
   try {
-    await fetchJSON("/api/set-type", {
+    await fetchJSON(`/api/sessions/${encodeURIComponent(S.id)}/set-type`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name, type }),
     });
@@ -136,11 +350,25 @@ async function saveType(name, type) {
   }
 }
 
-// Принимаемые расширения. Должны совпадать с ALLOWED_SUFFIXES в server.py:
+async function deleteFile(name) {
+  try {
+    await fetchJSON(`/api/sessions/${encodeURIComponent(S.id)}/file-delete`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    await loadSession();
+    logLine("Файл удалён из сессии: " + name, "warn");
+  } catch (e) {
+    logLine("Не удалось удалить файл: " + e.message, "err");
+  }
+}
+
+// Принимаемые расширения. Должны совпадать с ALLOWED_SUFFIXES в sessions.py:
 // .xlsx нужен спецификации (СО) - единственному документу связки не в PDF.
 const ACCEPTED_EXT = [".pdf", ".xlsx", ".xlsm"];
 
 async function uploadFiles(fileList) {
+  if (!S.id) return;
   const form = new FormData();
   let n = 0;
   for (const f of fileList) {
@@ -158,13 +386,14 @@ async function uploadFiles(fileList) {
 
   setStatus("Загрузка файлов…", true);
   try {
-    const res = await fetch("/api/upload", { method: "POST", body: form });
+    const res = await fetch(`/api/sessions/${encodeURIComponent(S.id)}/upload`,
+                            { method: "POST", body: form });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || res.statusText);
     logLine(`Загружено файлов: ${data.saved.length}` +
       (data.skipped.length ? `, пропущено: ${data.skipped.length}` : ""), "ok");
-    await refreshFiles();
-    setStatus("Файлы загружены. Укажите тип каждого и запустите анализ.", false);
+    await loadSession();
+    setStatus("Файлы загружены. Укажите тип каждого и поставьте сессию в очередь.", false);
   } catch (e) {
     logLine("Ошибка загрузки: " + e.message, "err");
     setStatus("Ошибка загрузки", false);
@@ -173,97 +402,67 @@ async function uploadFiles(fileList) {
 
 // Кнопка запуска активна, только когда все файлы имеют указанный тип
 function updateRunEnabled() {
-  const ready = FILES.length > 0 && FILES.every((f) => f.type);
-  const busy = statusTimer !== null;
-  $("run-btn").disabled = !ready || busy;
-  $("run-toggle").disabled = !ready || busy;
+  const ready = S.files.length > 0 && S.files.every((f) => f.type) && !isBusy();
+  $("run-btn").disabled = !ready;
+  $("run-toggle").disabled = !ready;
 }
 
 // ------------------------------------------------------------
-// Запуск анализа
+// Постановка в очередь и отмена
 // ------------------------------------------------------------
-async function startAnalysis(mode) {
+async function enqueue(mode) {
   closeRunMenu();
-  const types = {};
-  FILES.forEach((f) => { types[f.name] = f.type; });
-
   $("report-section").classList.remove("show");
-  logLine(`--- Старт анализа (режим: ${mode === "scripts" ? "без ИИ" : "полный"}) ---`, "ok");
-  setStatus("Анализ запущен…", true);
-
+  logLine(`--- Сессия ставится в очередь (режим: ${mode === "scripts" ? "без ИИ" : "полный"}) ---`, "ok");
   try {
-    const res = await fetch("/api/analyze", {
+    const data = await fetchJSON(`/api/sessions/${encodeURIComponent(S.id)}/enqueue`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode, types }),
+      body: JSON.stringify({ mode }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || res.statusText);
-    pollStatus();
+    S.meta.status = "queued";
+    S.meta.mode = mode;
+    S.meta.queue_position = data.queue_position;
+    renderFiles();          // на время прогона файлы менять нельзя
+    renderSessionStatus();
+    startSessionPolling();
   } catch (e) {
-    logLine("Не удалось запустить анализ: " + e.message, "err");
-    setStatus("Ошибка запуска", false);
+    logLine("Не удалось поставить в очередь: " + e.message, "err");
+    setStatus("Ошибка запуска", false, "err");
   }
 }
 
-function pollStatus() { resumePolling(0); }
-
-function resumePolling(startLen) {
-  if (statusTimer) clearInterval(statusTimer);
-  updateRunEnabled();
-  showCancel(true);
-  let lastLen = startLen || 0;
-  statusTimer = setInterval(async () => {
-    let s;
-    try { s = await fetchJSON("/api/status"); }
-    catch { return; }
-
-    // дописываем только новые строки лога
-    if (s.log.length > lastLen) {
-      for (let i = lastLen; i < s.log.length; i++) logLine(s.log[i], classifyLog(s.log[i]));
-      lastLen = s.log.length;
-    }
-
-    if (s.running) {
-      const note = s.cancel_requested ? " — останавливаем…" : "";
-      setStatus(`Идёт анализ… (режим: ${s.mode === "scripts" ? "без ИИ" : "полный"})${note}`, true);
-    } else {
-      clearInterval(statusTimer);
-      statusTimer = null;
-      showCancel(false);
-      updateRunEnabled();
-      if (s.stage === "cancelled") {
-        setStatus("Анализ отменён", false, "err");
-      } else if (s.stage === "error") {
-        setStatus("Анализ завершился с ошибкой", false, "err");
-      } else {
-        setStatus(`Анализ завершён. Замечаний: ${s.n_findings ?? "?"}`, false, "ok");
-        await showReport();
-      }
-    }
-  }, 1000);
-}
-
-// Отмена анализа. Сервер убивает процесс пайплайна мгновенно (весь процесс
-// целиком, со всеми потомками) - кнопку блокируем лишь на время самого запроса.
-async function cancelAnalysis() {
+// Отмена: сервер снимает сессию с очереди либо убивает процесс пайплайна
+// целиком, со всеми потомками - кнопку блокируем лишь на время самого запроса.
+async function cancelCurrent() {
   const btn = $("cancel-btn");
   btn.disabled = true;
   btn.textContent = "Останавливаем…";
-  logLine("--- Запрошена отмена анализа ---", "warn");
-  try {
-    await fetchJSON("/api/cancel", { method: "POST" });
-  } catch (e) {
-    logLine("Не удалось отменить: " + e.message, "err");
-    btn.disabled = false;
-    btn.textContent = "Отменить анализ";
-  }
+  logLine("--- Запрошена отмена ---", "warn");
+  await cancelSession(S.id, null);
+  try { await loadSession(); } catch { /* сессию могли удалить */ }
+  await pumpLog();
+  btn.textContent = "Отменить";
 }
 
 function showCancel(on) {
   const btn = $("cancel-btn");
   if (!btn) return;
   btn.style.display = on ? "" : "none";
-  if (on) { btn.disabled = false; btn.textContent = "Отменить анализ"; }
+  if (on) { btn.disabled = false; btn.textContent = "Отменить"; }
+}
+
+async function renameSession() {
+  const name = prompt("Новое название сессии:", S.meta ? S.meta.name : "");
+  if (!name) return;
+  try {
+    await fetchJSON(`/api/sessions/${encodeURIComponent(S.id)}/rename`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    await loadSession();
+  } catch (e) {
+    alert("Не удалось переименовать: " + e.message);
+  }
 }
 
 // ------------------------------------------------------------
@@ -271,7 +470,7 @@ function showCancel(on) {
 // ------------------------------------------------------------
 async function showReport() {
   let data;
-  try { data = await fetchJSON("/api/report"); }
+  try { data = await fetchJSON(`/api/sessions/${encodeURIComponent(S.id)}/report`); }
   catch (e) { logLine("Отчёт недоступен: " + e.message, "warn"); return; }
   renderReport(data);
   $("report-section").classList.add("show");
@@ -545,6 +744,15 @@ function setStatus(text, busy, cls) {
 // События
 // ------------------------------------------------------------
 function bindEvents() {
+  $("btn-new-session").addEventListener("click", () => toggleNewSession(true));
+  $("btn-create-cancel").addEventListener("click", () => toggleNewSession(false));
+  $("btn-create").addEventListener("click", createSession);
+  $("new-session-name").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") createSession();
+    if (e.key === "Escape") toggleNewSession(false);
+  });
+  $("btn-rename").addEventListener("click", renameSession);
+
   const dz = $("dropzone");
   const input = $("file-input");
   dz.addEventListener("click", () => input.click());
@@ -555,13 +763,13 @@ function bindEvents() {
     dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("drag"); }));
   dz.addEventListener("drop", (e) => { if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files); });
 
-  $("run-btn").addEventListener("click", () => startAnalysis("full"));
+  $("run-btn").addEventListener("click", () => enqueue("full"));
   $("run-toggle").addEventListener("click", (e) => { e.stopPropagation(); toggleRunMenu(); });
   $("run-menu").querySelectorAll("button").forEach((b) =>
-    b.addEventListener("click", () => startAnalysis(b.dataset.mode)));
+    b.addEventListener("click", () => enqueue(b.dataset.mode)));
   document.addEventListener("click", closeRunMenu);
 
-  $("cancel-btn").addEventListener("click", cancelAnalysis);
+  $("cancel-btn").addEventListener("click", cancelCurrent);
   $("btn-check-llm").addEventListener("click", checkLLM);
   $("btn-show-report").addEventListener("click", showReport);
   $("btn-clear-console").addEventListener("click", () => { $("console").innerHTML = ""; });
@@ -593,5 +801,11 @@ function fmtSize(b) {
   return (b / 1024 / 1024).toFixed(1) + " МБ";
 }
 function fmtCtx(n) { return n >= 1000 ? Math.round(n / 1000) + "K" : String(n); }
+function fmtTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit",
+    year: "2-digit", hour: "2-digit", minute: "2-digit" });
+}
 
 init();
