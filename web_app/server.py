@@ -6,11 +6,15 @@
 работает офлайн.
 
 Единица работы - СЕССИЯ (sessions.py): комплект документов одного шкафа плюс её
-прогон и её отчёт, со своей папкой на диске. Сессии создаются прямо в интерфейсе,
-видны всем без авторизации (инструмент корпоративный) и выполняются глобальной
-очередью строго по одной (queue_worker.py) - LM Studio на всех один. Поставив
-сессию в очередь, можно закрыть вкладку: статус, лог и отчёт живут на диске, а
-не в памяти браузера или процесса.
+прогон и её отчёт, со своей папкой на диске. Сессии создаются прямо в интерфейсе
+и видны всем без авторизации (инструмент корпоративный). Поставив сессию на
+исполнение, можно закрыть вкладку: статус, лог и отчёт живут на диске, а не в
+памяти браузера или процесса.
+
+СКРИПТЫ СЧИТАЮТСЯ СРАЗУ, В ОЧЕРЕДЬ ВСТАЁТ ТОЛЬКО СТАДИЯ ИИ (queue_worker.py):
+извлечение и детерминированные чекеры грузят локальный процессор и друг другу не
+мешают, а LM Studio на всех один. Раньше в очереди стоял весь прогон - и человек
+ждал чужой работы с моделью ради находок чекера, которые считаются за секунды.
 
 Сам анализ (analyzer_to_errors/main.py:run_pipeline) запускается ОТДЕЛЬНЫМ
 ПОДПРОЦЕССОМ (_pipeline_runner.py), а не в потоке текущего процесса - только так
@@ -33,12 +37,16 @@
     POST /api/sessions/<id>/rename      - переименовать {name}
     POST /api/sessions/<id>/delete      - удалить сессию целиком
     POST /api/sessions/<id>/upload      - дозагрузить файлы (multipart)
-    POST /api/sessions/<id>/file-delete - удалить один файл {name}
+    POST /api/sessions/<id>/file-delete - удалить один файл {path}
     POST /api/sessions/<id>/set-type    - тип документа {name, type}
-    POST /api/sessions/<id>/enqueue     - поставить в очередь {mode}
+    POST /api/sessions/<id>/enqueue     - поставить на исполнение {mode}
     POST /api/sessions/<id>/cancel      - снять с очереди либо оборвать прогон
-    GET  /api/sessions/<id>/log?since=N - лог прогона начиная со строки N
-    GET  /api/sessions/<id>/report      - отчёт этой сессии
+    GET  /api/sessions/<id>/log?since=N - лог прогона начиная со строки N,
+                                          плюс стадия и текущий лист
+    GET  /api/sessions/<id>/report      - отчёт этой сессии (JSON)
+    GET  /api/sessions/<id>/report.pdf  - тот же отчёт одним PDF
+    GET  /api/sessions/<id>/file?path=  - исходный документ (открыть во вкладке)
+    GET  /api/sessions/<id>/fragment?…  - PNG с фрагментом чертежа у находки
 """
 
 import argparse
@@ -48,7 +56,7 @@ import sys
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent
@@ -63,10 +71,21 @@ sys.path.insert(0, str(ANALYZER_DIR))
 import main as pipeline          # noqa: E402
 from llm_check import check_server_alive  # noqa: E402  (быстрая проверка сервера)
 
+import queue_worker                       # noqa: E402  (константы пула - во фронтенд)
 from queue_worker import AnalysisQueue    # noqa: E402
 from sessions import FULL_PROJECT_TYPE, SessionError, SessionStore  # noqa: E402
 
-PROJECT_VERSION = "V1.3"
+PROJECT_VERSION = "V1.5 Alpha"
+
+# Content-Type для просмотра исходных документов сессии прямо в браузере.
+# PDF отдаём inline (вкладка откроет встроенный просмотрщик), книгу Excel -
+# вложением: показать её браузер всё равно не умеет, а скачать - полезно.
+VIEWABLE_TYPES = {
+    ".pdf": ("application/pdf", "inline"),
+    ".xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              "attachment"),
+    ".xlsm": ("application/vnd.ms-excel.sheet.macroEnabled.12", "attachment"),
+}
 
 # Типы документов, которые принимает анализатор. Отсюда же фронтенд берёт список
 # для выпадающего выбора типа у каждого загруженного файла - единый источник.
@@ -226,6 +245,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self._api_log(session_id, since)
                 if action == "report":
                     return self._send_json(STORE.report(session_id))
+                if action == "report.pdf":
+                    return self._api_report_pdf(session_id)
+                if action == "file":
+                    query = parse_qs(parsed.query)
+                    return self._api_file(session_id, query.get("path", [""])[0])
+                if action == "fragment":
+                    return self._api_fragment(session_id, parse_qs(parsed.query))
             self.send_error(404)
         except SessionError as e:
             self._send_json({"error": str(e)}, e.status)
@@ -248,7 +274,9 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "upload":
                     return self._api_upload(session_id)
                 if action == "file-delete":
-                    STORE.delete_file(session_id, self._body_json().get("name"))
+                    body = self._body_json()
+                    # path, а не name: имена в подпапках-связках повторяются
+                    STORE.delete_file(session_id, body.get("path") or body.get("name"))
                     return self._send_json({"ok": True})
                 if action == "set-type":
                     body = self._body_json()
@@ -312,27 +340,33 @@ class Handler(BaseHTTPRequestHandler):
 
     def _api_sessions_list(self):
         """Список всех сессий - общий для всех пользователей, локализации нет.
-        Номер в очереди считаем здесь, а не храним: очередь живёт в памяти
-        воркера, и её порядок - единственное, что его определяет."""
+        Номера в очередях считаем здесь, а не храним: очереди живут в памяти
+        воркера, и их порядок - единственное, что его определяет."""
         positions = QUEUE.positions()
+        llm_positions = QUEUE.llm_positions()
         snap = QUEUE.snapshot()
         sessions = []
         for meta in STORE.list():
             item = dict(meta)
             item["queue_position"] = positions.get(meta["id"])
+            item["llm_position"] = llm_positions.get(meta["id"])
             item["n_files"] = len(STORE.files(meta["id"]))
             sessions.append(item)
         self._send_json({
             "sessions": sessions,
-            "running_id": snap["running_id"],
+            "running": snap["running"],
             "queued": snap["queued"],
+            "llm_queue": snap["llm_queue"],
+            "llm_busy": snap["llm_busy"],
+            "script_workers": queue_worker.SCRIPT_WORKERS,
         })
 
     def _session_view(self, session_id):
         meta = dict(STORE.get(session_id))
         meta["files"] = STORE.files(session_id)
         meta["queue_position"] = QUEUE.positions().get(session_id)
-        meta["is_running"] = QUEUE.snapshot()["running_id"] == session_id
+        meta["llm_position"] = QUEUE.llm_positions().get(session_id)
+        meta["is_running"] = session_id in QUEUE.snapshot()["running"]
         return meta
 
     def _api_session_create(self):
@@ -391,7 +425,93 @@ class Handler(BaseHTTPRequestHandler):
             "error": meta.get("error"),
             "n_findings": meta.get("n_findings"),
             "queue_position": QUEUE.positions().get(session_id),
+            # что именно считается прямо сейчас и на каком листе
+            "stage": meta.get("stage"),
+            "progress": meta.get("progress"),
+            "llm_position": QUEUE.llm_positions().get(session_id),
         })
+
+    # ---- просмотр исходных документов ----
+
+    def _api_file(self, session_id, rel_path):
+        """Отдаёт исходный документ сессии, чтобы открыть его в соседней вкладке.
+
+        Путь берётся из поля "path" в списке файлов и проверяется в
+        SessionStore.resolve_file: наружу пускается только base_files и
+        full_projects, а не вся папка сессии (рядом лежат извлечённые данные и
+        копия скриптов - показывать их незачем)."""
+        target = STORE.resolve_file(session_id, rel_path)
+        ctype, disposition = VIEWABLE_TYPES.get(
+            target.suffix.lower(), ("application/octet-stream", "attachment"))
+        data = target.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        # RFC 5987: имена документов кириллические, голым latin-1 их в заголовок
+        # не положить - браузер получил бы кракозябры вместо имени файла
+        self.send_header("Content-Disposition",
+                         f"{disposition}; filename*=UTF-8''{quote(target.name)}")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _api_report_pdf(self, session_id):
+        """Отчёт сессии одним PDF - тем, что уходит инженеру и в архив проекта."""
+        import report_pdf          # импорт здесь: тянет fitz, серверу он нужен
+                                   # только в этом эндпоинте
+
+        meta = STORE.get(session_id)
+        report = STORE.report(session_id)      # 404, если отчёта ещё нет
+        paths = STORE.paths_of(session_id)
+        data = report_pdf.build(
+            report=report,
+            session=meta,
+            manifest_path=paths["data_dir"] / "manifest.json",
+            doc_types=DOC_TYPES,
+            version=PROJECT_VERSION,
+        )
+        name = f"Отчёт — {meta['name']}.pdf"
+        self.send_response(200)
+        self.send_header("Content-Type", "application/pdf")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Disposition",
+                         f"attachment; filename*=UTF-8''{quote(name)}")
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _api_fragment(self, session_id, query):
+        """PNG с фрагментом чертежа вокруг места находки.
+
+        Инженеру мало прочитать «обозначение QF1 отсутствует в спецификации» -
+        ему нужно увидеть это место на листе. Координат в находке нет (чекеры
+        работают с извлечённым текстом, а не с геометрией), поэтому место
+        отыскивается поиском по самому PDF - см. fragment.py."""
+        import fragment            # импорт здесь: тянет fitz
+
+        paths = STORE.paths_of(session_id)
+        one = lambda k: (query.get(k) or [""])[0]   # noqa: E731
+        try:
+            png, info = fragment.render(
+                manifest_path=paths["data_dir"] / "manifest.json",
+                document=one("document"),
+                sheet=one("sheet"),
+                needles=query.get("q") or [],
+            )
+        except fragment.FragmentError as e:
+            # 404 с человеческим текстом: «фрагмент показать не удалось» - это
+            # нормальный исход (надпись начерчена линиями, лист не тот), а не сбой
+            raise SessionError(str(e), 404)
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(png)))
+        self.send_header("Cache-Control", "no-store")
+        # Чем оказался показанный кусок - в заголовки: подпись под картинкой
+        # обязана называть ЛИСТ, который на ней действительно виден, а он не
+        # всегда тот, что назван в находке (см. fragment.render).
+        self.send_header("X-Fragment-Page", str(info["page"]))
+        self.send_header("X-Fragment-Fallback", "1" if info["fallback"] else "0")
+        self.send_header("X-Fragment-Hits", str(info["hits"]))
+        self.end_headers()
+        self.wfile.write(png)
 
 
 def main():

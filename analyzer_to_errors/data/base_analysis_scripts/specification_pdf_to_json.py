@@ -74,6 +74,7 @@ def _sibling(name, mod_name):
 # формата одной и той же спецификации давали один и тот же набор данных.
 _xlsx = _sibling("specification_to_json.py", "_spec_xlsx")
 _schem = _sibling("schematic_diagram_to_data.py", "_spec_fontfix")
+_progress = _sibling("progress.py", "_spec_progress")
 
 parse_designators = _xlsx.parse_designators
 SECTION_RE = _xlsx.SECTION_RE
@@ -324,6 +325,7 @@ def parse_pdf(path):
 
     try:
         for page_no, page in enumerate(doc, start=1):
+            _progress.page(page_no, len(doc), stage="чтение спецификации")
             lines = _page_lines(page, font_map)
             number_row = _find_number_row(lines, page.rect.height)
             if not number_row:

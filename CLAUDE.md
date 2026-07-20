@@ -76,14 +76,24 @@ from main import run_pipeline
 merged = run_pipeline()                                   # doc type from the filename
 merged = run_pipeline(doc_types={"файл.pdf": "scheme"})    # doc type from upload form
 merged = run_pipeline(skip_agents=True)                    # "no AI" mode: checker findings only
+merged = run_pipeline(llm_gate=wait_fn)                    # block right before the agent stage
 ```
+
+`llm_gate` is called **once**, immediately before `preflight_llm`, and may block for as
+long as it likes. That is the whole mechanism behind the web UI's queue: scripts run
+immediately and in parallel, only the agent stage is serialized. Nothing else in the
+pipeline knows the queue exists.
 
 There is no test suite, linter, or build step in this repo — verification is running
 `--extract-only` / `--rules-only` against the real bundle in
 `analyzer_to_errors/data/base_files/`, or `--check-llm` against the configured LM Studio
-servers. Extraction takes minutes; `--rules-only` on already-extracted data is instant and
-is the fast loop when working on checkers. A sudden jump in the finding count means a
-checker regressed into false positives.
+servers. `--rules-only` on already-extracted data is instant and is the fast loop when
+working on checkers. A sudden jump in the finding count means a checker regressed into
+false positives.
+
+Extraction used to take minutes; it no longer does (ЩСКЗ bundle **7 s**, a 309-sheet
+album **143 s**) — see the perf note under `schematic_diagram_to_data.py` below. Both
+numbers are cheap enough to re-run on every change, so do.
 
 **Current corpus — ЩСКЗ** (`Итог1.pdf` Э3 + `026.822.13-ИПК ЩСКЗ СБ` + `... СО.xlsx`).
 The schematic has no kind mark in its name, so its type comes from `data/.doc_types.json`
@@ -243,12 +253,26 @@ Each doc type maps to one or more base parser scripts (`DOC_TYPES` in `ingest.py
 exposing `extract_to_dir(path, out_dir) -> (files, stats)`:
 - `scheme` → `schematic_diagram_to_data.py` (text/lines/graph/IO channels) +
   `schematic_connectivity.py` (real nets incl. T-junctions, terminal index, duplicate
-  terminal addresses, relay coils). Wire candidates **drop zero-width lines** (`drop_glyph_hairlines`):
+  terminal addresses, relay coils). Wire candidates **drop zero-width lines** (`drop_glyph_hairlines`,
+  which lives in `schematic_diagram_to_data.py` — connectivity imports it, the dependency
+  runs that way):
   CAD export writes text as vector outlines, and those hairline fragments glue every net on
   the sheet into one blob (the biggest net on ЩСКЗ sheet 10.2 was 2837 segments; it is 39
   after the filter, with no terminal lost). Real wires are stroked with a real pen; the
   filter self-disables if a sheet has almost no stroked lines, so a bureau that draws wires
   hairline keeps the old behaviour instead of silently ending up with no wires at all.
+
+  **The one perf fact worth not re-learning.** `build_issue_candidates` used to be
+  **98.6% of the whole scheme parse** (34.7 s of 35.2 s on a *four-sheet* file; hours on an
+  album). Not because Python is slow — because `find_wire_crossings` tested every pair of
+  segments (27 M `_seg_intersect` calls per sheet) and the segments it was mostly testing
+  were **letter outlines crossing themselves**. That is also where the "13901 crossings" on
+  a file with a few hundred wires came from, which is why the agent prompt had to carry a
+  warning that the list means nothing. Fixed by applying the hairline filter here too
+  (n drops ~44×) plus a bbox grid for pair enumeration; the geometry is untouched, the same
+  `_seg_intersect` still decides. **34.7 s → 0.02 s**, crossings 13901 → 241, ЩСКЗ baseline
+  still exactly 6. If extraction ever "hangs while the CPU idles" again, look for another
+  quadratic loop before reaching for C or multiprocessing.
 - `netlist` → `netlist_to_json.py`
 - `assembly` → `assembly_drawing_to_data.py` (labels only — **never** `get_drawings()`:
   one sheet holds up to 440k vector primitives and none of it helps find documentation
@@ -329,6 +353,29 @@ fields are **required** in that key: bundle findings have no terminal/pin/kks at
 without them every bundle finding on a document collapses to one signature and distinct
 errors vanish from the report.
 
+### Two consumers of a finding beyond the table
+
+**`fragment.py`** — the crop of the drawing behind the "фрагмент" button. It finds the
+spot by **searching the source PDF for the finding's key**, not by coordinates: a ref
+locates things in domain fields on purpose, since findings come from checkers *and* from
+the model, and the model has no coordinates at all. Three things there are load-bearing:
+keys are tried specific→general (article → designator → marking → kks → terminal block,
+and the terminal block goes in **without** the pin, because `1XT5:3` is drawn as split
+fragments and never matches whole); the sheet named in the finding is only the *first*
+candidate, and when the key isn't there the response must say which sheet was actually
+rendered (`X-Fragment-Page` / `X-Fragment-Fallback`) — on "element missing from its peer
+sheet" the absence *is* the finding, and silently showing another sheet reads as a
+refutation of it; and pages arrive with `/Rotate 270`, so `search_for` returns
+**un-rotated** coordinates — clip via `rotation_matrix`, draw with the raw rect. Getting
+that wrong crashed the render on some sheets and, worse, silently framed the wrong region
+on others.
+
+**`report_pdf.py`** — the report as one PDF, which is what gets emailed and filed. It
+opens with a **description of the analysis** — documents, bundles, what was checked and
+explicitly what is *not* checked — before any finding. Without that framing a list of
+findings reads as "here are the project's errors", which is false: whole checks are
+deliberately absent, and `REVIEW` findings are questions, not assertions.
+
 ### `web_app/` — the local UI
 
 Единица работы интерфейса — **СЕССИЯ** (`sessions.py`): комплект документов одного шкафа
@@ -338,11 +385,36 @@ errors vanish from the report.
 и переносит в `data/full_projects/` сессии. Папка эта лежит **рядом** с `base_files`, а не
 внутри: `base_files` сканируется рекурсивно и подпапка в нём означает связку, так что
 альбом внутри стал бы «связкой» из одного нечитаемого файла на 200 листов. Сессии
-создаются в
-интерфейсе, видны всем без авторизации (инструмент корпоративный, локализации нет) и
-выполняются **глобальной очередью строго по одной** (`queue_worker.py`) — LM Studio на
-всех один. Поставив сессию в очередь, вкладку можно закрыть: статус, лог и отчёт живут на
-диске, а не в памяти процесса или браузера.
+создаются в интерфейсе и видны всем без авторизации (инструмент корпоративный,
+локализации нет). Поставив сессию на исполнение, вкладку можно закрыть: статус, лог и
+отчёт живут на диске, а не в памяти процесса или браузера.
+
+**В ОЧЕРЕДЬ ВСТАЁТ НЕ ПРОГОН, А ТОЛЬКО СТАДИЯ ИИ** (`queue_worker.py`). Прежняя схема
+«одна сессия за раз целиком» была неверной: скриптовая стадия грузит локальный процессор
+и чужим сессиям не мешает ничем, а человек ждал чужой сорокаминутной работы с моделью
+ради находок чекера, которые считаются за секунды. Тем более что режим «без ИИ» ждал в
+той же очереди, хотя к серверу ИИ не обращается вовсе. Теперь:
+
+* **скриптовый пул** (`SCRIPT_WORKERS = 4`) — сессия начинает считаться сразу; пул
+  конечен, потому что десять одновременных разборов альбома упрут в диск;
+* **слот к ИИ ровно один** (`LLM_SLOTS`) и поднимать его нельзя — LM Studio на всех один.
+
+Механика гейта: дойдя до стадии агентов, подпроцесс печатает в stdout `@@LLM_WAIT` и
+**замирает на чтении своего stdin**; воркер (который и так читает этот stdout построчно)
+ставит сессию в llm-очередь, а освободив слот, пишет ей строку в stdin. Канал между
+процессами уже был и уже читался построчно, а блокировка на `read()` снимается сама
+собой, если процесс убьют (отмена) — никакого состояния на диске, которое пришлось бы
+подчищать после падения сервера.
+
+Статусы при этом не менялись; появилось поле `stage` (`"скрипты"` / `"очередь к ИИ"` /
+`"ИИ"`), по нему интерфейс и различает «работает» и «ждёт».
+
+**Ход разбора виден пользователю** (`data/base_analysis_scripts/progress.py`): парсеры
+печатают в stdout строки `@@PROGRESS {...}`, воркер их разбирает, в лог НЕ кладёт (на
+альбоме их триста) и складывает в `session.json` → интерфейс показывает «документ 15 из
+30 · чтение схемы · лист 22 из 26». Для стадии ИИ такого показателя нет и быть не может:
+агент сам решает, какой файл открыть и в каком порядке, и рисовать ему прогресс-бар
+значило бы врать.
 
 **Изоляция сессий сделана путями, а не правками пайплайна.** `_pipeline_runner.py`
 собирает `config.yaml` сессии — копию базового, где весь раздел `paths` заменён на
@@ -356,12 +428,22 @@ errors vanish from the report.
 `config.paths` — с копией обе вещи работают без правок. `known_errors.json` остаётся общим
 для всех сессий: это накопленное знание, а не результат прогона.
 
-Эндпоинты: `/api/config`, `/api/check-llm`, `/api/sessions` (список + состояние очереди,
+Эндпоинты: `/api/config`, `/api/check-llm`, `/api/sessions` (список + состояние очередей,
 POST — создать) и `/api/sessions/<id>/{rename,delete,upload,file-delete,set-type,enqueue,
-cancel,log,report}`. Лог отдаётся порциями (`log?since=N`), а не целиком на каждый опрос.
-Пометки типа документа хранятся в `session.json` и уезжают в `data/.doc_types.json` сессии
-только перед запуском — общий сайдкар был один на весь сервер и ключевался голым именем
-файла, из-за чего две сессии спорили за одну запись.
+cancel,log,report,report.pdf,file,fragment}`. Лог отдаётся порциями (`log?since=N`), а не
+целиком на каждый опрос; вместе с ним едут `stage` и `progress`. Пометки типа документа
+хранятся в `session.json` и уезжают в `data/.doc_types.json` сессии только перед запуском —
+общий сайдкар был один на весь сервер и ключевался голым именем файла, из-за чего две
+сессии спорили за одну запись.
+
+Файлы адресуются **путём относительно `data/` сессии** (поле `path` в списке файлов), а
+не именем: в альбоме у каждого шкафа своя подпапка и своё «Общий вид», имена повторяются,
+и по имени сервер открыл бы или удалил не тот файл. `resolve_file` пускает наружу только
+`base_files` и `full_projects` — рядом в `data/` лежат извлечённые данные и копия
+скриптов.
+
+`report.pdf` (`analyzer_to_errors/report_pdf.py`) и `fragment` (`fragment.py`) тянут
+`fitz`, поэтому импортируются **внутри своих обработчиков**, а не наверху модуля.
 
 Анализ по-прежнему исполняется **отдельным подпроцессом** (`_pipeline_runner.py` с JSON
 args-файлом), а не потоком — только так отмена убивает всё дерево процессов мгновенно и
@@ -374,6 +456,17 @@ args-файлом), а не потоком — только так отмена 
 их процесс умер вместе с прежним сервером. Автоматически они НЕ перезапускаются —
 пользователь мог перезапустить сервер именно ради остановки прогона; `queued` при этом
 возвращаются в очередь в порядке `queued_at`.
+
+**`has_files` считает и `full_projects`, не только `base_files`.** Иначе повторный запуск
+сессии с альбомом был невозможен, а выглядело это как «файл не найден»: альбом
+опознаётся уже ВНУТРИ прогона (по числу листов — `web_app` открыть PDF не может) и
+переезжает из `base_files` в `full_projects`. Оборви прогон до того, как нарезка успела
+разложить части обратно, — а обрывают его как раз там, потому что чтение штампов трёхсот
+листов и есть самое долгое место, — и `base_files` оставался пуст. Сессия при этом
+полностью исправна, но `enqueue` отказывал, и единственным выходом было загрузить
+документ заново. По той же причине удаление последнего альбома стирает и нарезанные из
+него части: иначе остались бы связки-шкафы от документа, которого в сессии больше нет, и
+следующий прогон молча сверял бы призраков (нарезку чистит только сама нарезка).
 
 Папка сессии сама и есть архив прогона, поэтому прежнее копирование результатов в
 `story/<имя>/<дата>/` удалено. Старые папки `story/` остались лежать — их, как и раньше,

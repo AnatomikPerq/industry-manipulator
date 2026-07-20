@@ -174,6 +174,11 @@ class SessionStore:
                 "n_findings": None,
                 "error": None,
                 "doc_types": {},
+                # что считается прямо сейчас: "скрипты" | "очередь к ИИ" | "ИИ"
+                "stage": None,
+                # какой документ и какой его лист читает парсер (см. progress.py)
+                "progress": None,
+                "llm_position": None,
             }
             self._write_meta(meta)
             return meta
@@ -234,7 +239,8 @@ class SessionStore:
             for meta in self.list():
                 if meta["status"] == "running":
                     self.update(meta["id"], status="interrupted",
-                                finished_at=time.time(),
+                                finished_at=time.time(), stage=None, progress=None,
+                                llm_position=None,
                                 error="Сервер был перезапущен во время анализа")
                     self.append_log(meta["id"],
                                     "!!! Сервер был перезапущен - прогон прерван")
@@ -250,11 +256,18 @@ class SessionStore:
         догадка по имени файла (марка вида по ГОСТ - см. ingest.detect_doc_type).
 
         rglob, а не iterdir: пользователь может разложить комплект по подпапкам
-        base_files/, и такие подпапки - явные связки (bundles.py)."""
+        base_files/, и такие подпапки - явные связки (bundles.py).
+
+        Поле "path" - путь относительно папки data сессии. Именно он, а не имя,
+        адресует файл в эндпоинтах просмотра и удаления: имена в разных
+        подпапках-связках повторяются (у каждого шкафа альбома свой «Общий
+        вид»), и по голому имени сервер открыл бы не тот файл.
+        """
         import ingest  # импорт здесь: analyzer_to_errors уже в sys.path у сервера
 
         meta = self._read_meta(session_id)
         paths = self.paths_of(session_id)
+        data_dir = paths["data_dir"]
         base = paths["base_files_dir"]
         overrides = meta.get("doc_types") or {}
         files = []
@@ -267,11 +280,16 @@ class SessionStore:
                 rel = p.relative_to(base)
                 files.append({
                     "name": p.name,
+                    "path": p.relative_to(data_dir).as_posix(),
                     "size": p.stat().st_size,
                     "detected_type": overrides.get(p.name) or ingest.detect_doc_type(p.name),
                     # связка. Обычно None: все документы прогона - один проект;
                     # имя появляется, только если файлы разложены по подпапкам
                     "bundle": rel.parts[0] if len(rel.parts) > 1 else None,
+                    # часть, нарезанная из альбома, а не загруженная руками:
+                    # её тип уже проставлен пометкой в имени, удалять её по
+                    # одной бессмысленно (следующий прогон нарежет заново)
+                    "generated": self._is_generated_part(p),
                 })
 
         # Альбомы. Показываются вместе с остальными файлами, хотя лежат в другой
@@ -288,11 +306,43 @@ class SessionStore:
                     continue
                 files.append({
                     "name": p.name,
+                    "path": p.relative_to(data_dir).as_posix(),
                     "size": p.stat().st_size,
                     "detected_type": FULL_PROJECT_TYPE,
                     "bundle": None,
+                    "generated": False,
                 })
         return files
+
+    @staticmethod
+    def _is_generated_part(path: Path) -> bool:
+        """Лежит ли файл в папке, которую нарезал сплиттер альбомов.
+
+        Метку кладёт full_project.GENERATED_MARKER; читаем её по имени, а не
+        импортом, чтобы web_app не тянул за собой fitz."""
+        parent = path.parent
+        return parent.name != "base_files" and (parent / ".from_full_project").exists()
+
+    def resolve_file(self, session_id, rel_path) -> Path:
+        """Путь файла сессии по значению поля "path" из files().
+
+        Проверка обязательна: значение приходит из URL. Пускаем только внутрь
+        base_files и full_projects - в папке data сессии рядом лежат ещё и
+        извлечённые данные, и копия скриптов, и отдавать их наружу незачем.
+        """
+        paths = self.paths_of(session_id)
+        rel = Path(str(rel_path or ""))
+        if rel.is_absolute() or ".." in rel.parts:
+            raise SessionError(f"Недопустимый путь файла: {rel_path}", 400)
+
+        target = (paths["data_dir"] / rel).resolve()
+        allowed = (paths["base_files_dir"].resolve(),
+                   paths["full_projects_dir"].resolve())
+        if not any(target == root or root in target.parents for root in allowed):
+            raise SessionError(f"Недопустимый путь файла: {rel_path}", 400)
+        if not target.is_file():
+            raise SessionError(f"Файл не найден: {rel.name}", 404)
+        return target
 
     def save_upload(self, session_id, filename, data: bytes) -> str:
         """Кладёт один файл в base_files сессии. В отличие от прежней загрузки,
@@ -310,28 +360,42 @@ class SessionStore:
         (base / name).write_bytes(data)
         return name
 
-    def delete_file(self, session_id, filename) -> None:
+    def delete_file(self, session_id, rel_path) -> None:
         meta = self._read_meta(session_id)
         if meta["status"] in ACTIVE_STATUSES:
             raise SessionError("Сессия в очереди или выполняется - файлы менять нельзя", 409)
         paths = self.paths_of(session_id)
-        name = Path(filename).name
-        target = None
-        # base_files рекурсивно (файл может лежать в подпапке-связке), затем
-        # full_projects: после прогона альбом лежит там, и не заглянув сюда,
-        # удалить его из интерфейса было бы нельзя вовсе.
-        for p in list(paths["base_files_dir"].rglob("*")) + \
-                list(paths["full_projects_dir"].glob("*")):
-            if p.is_file() and p.name == name:
-                target = p
-                break
-        if target is None:
-            raise SessionError(f"Файл не найден: {name}", 404)
+        target = self.resolve_file(session_id, rel_path)
+        was_album = target.parent == paths["full_projects_dir"]
         target.unlink()
+
+        # Удалили альбом - вместе с ним уходят и нарезанные из него части.
+        # Иначе в base_files остались бы связки-шкафы от документа, которого в
+        # сессии больше нет: следующий прогон не увидел бы ни одного альбома,
+        # а значит и не запустил бы нарезку (только она чистит старые части),
+        # и молча сверял бы между собой призраки удалённого проекта.
+        if was_album and not self._remaining_albums(session_id):
+            self._clear_generated_parts(paths["base_files_dir"])
+
         with self._lock:
             meta = self._read_meta(session_id)
-            if meta.get("doc_types", {}).pop(name, None) is not None:
+            if meta.get("doc_types", {}).pop(target.name, None) is not None:
                 self._write_meta(meta)
+
+    def _remaining_albums(self, session_id) -> bool:
+        fp = self.paths_of(session_id)["full_projects_dir"]
+        return fp.is_dir() and any(
+            p.is_file() and p.suffix.lower() == ".pdf" for p in fp.iterdir())
+
+    @staticmethod
+    def _clear_generated_parts(base_files_dir: Path) -> None:
+        """То же, что full_project.clear_generated_parts, но без импорта fitz:
+        web_app эту зависимость не тянет (и не должен). Метка одна и та же."""
+        if not base_files_dir.is_dir():
+            return
+        for item in base_files_dir.iterdir():
+            if item.is_dir() and (item / ".from_full_project").exists():
+                shutil.rmtree(item, ignore_errors=True)
 
     def set_type(self, session_id, filename, doc_type, valid_types) -> None:
         """Пометка типа документа. Хранится в session.json, а не в общем
@@ -354,9 +418,32 @@ class SessionStore:
             self._write_meta(meta)
 
     def has_files(self, session_id) -> bool:
-        base = self.paths_of(session_id)["base_files_dir"]
-        return base.is_dir() and any(
-            p.is_file() and p.suffix.lower() in ALLOWED_SUFFIXES for p in base.rglob("*"))
+        """Есть ли в сессии хоть что-то для анализа.
+
+        СЧИТАЕТ И full_projects, а не только base_files. Иначе повторный запуск
+        сессии с альбомом был невозможен, и выглядело это как "файл пропал":
+        альбом опознаётся уже внутри прогона (по числу листов - web_app открыть
+        PDF не может) и ПЕРЕЕЗЖАЕТ из base_files в full_projects. Если прогон
+        оборвать до того, как нарезка успела разложить части обратно в
+        base_files - а обрывают его как раз там, потому что чтение штампов
+        трёхсот листов и есть самое долгое место, - base_files оставался пуст.
+        Сессия при этом полностью исправна: альбом лежит на диске в соседней
+        папке, и следующий прогон нарезал бы его заново. Но enqueue отказывал,
+        и единственным выходом было загрузить документ заново.
+        """
+        paths = self.paths_of(session_id)
+        base = paths["base_files_dir"]
+        if base.is_dir() and any(
+                p.is_file() and p.suffix.lower() in ALLOWED_SUFFIXES
+                and not p.name.startswith(("~$", "."))
+                for p in base.rglob("*")):
+            return True
+
+        fp = paths["full_projects_dir"]
+        return fp.is_dir() and any(
+            p.is_file() and p.suffix.lower() == ".pdf"
+            and not p.name.startswith(("~$", "."))
+            for p in fp.iterdir())
 
     # ---------- лог ----------
 

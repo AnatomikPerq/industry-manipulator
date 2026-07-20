@@ -237,6 +237,21 @@ def _title_cell(lines):
     return cell
 
 
+def _load_progress(scripts_dir):
+    """Модуль сообщений о ходе работы из папки скриптов (она копируется в
+    каждую сессию, поэтому грузим по пути). Не нашёлся - работаем молча."""
+    import importlib.util
+
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "_progress", Path(scripts_dir) / "progress.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def read_sheet_titles(pdf_path, scripts_dir):
     """Наименование документа для каждого листа альбома.
 
@@ -245,10 +260,18 @@ def read_sheet_titles(pdf_path, scripts_dir):
     """
     pdf_path, scripts_dir = Path(pdf_path), Path(scripts_dir)
     font_map, apply_fix = _load_font_fix(scripts_dir, pdf_path)
+    reporter = _load_progress(scripts_dir)
 
     doc = fitz.open(str(pdf_path))
     try:
-        cells = [_title_cell(_stamp_lines(p, font_map, apply_fix)) for p in doc]
+        # Самое долгое место всей скриптовой стадии на альбоме: штамп читается у
+        # каждого из трёхсот листов. Именно здесь пользователь и жмёт «отменить»,
+        # решив, что программа повисла, - поэтому лист называем вслух.
+        cells = []
+        for i, p in enumerate(doc):
+            if reporter:
+                reporter.page(i + 1, len(doc), stage="разбор альбома: чтение штампов")
+            cells.append(_title_cell(_stamp_lines(p, font_map, apply_fix)))
     finally:
         doc.close()
 
@@ -389,11 +412,15 @@ def split_full_project(pdf_path, base_files_dir, scripts_dir):
     logger.info("Полный проект %s: %d листов -> %d частей",
                 pdf_path.name, len(titles), len(parts))
 
+    reporter = _load_progress(scripts_dir)
     source = fitz.open(str(pdf_path))
     written, skipped, used_names = [], [], set()
     prev_cabinet = None
     try:
-        for part in parts:
+        for n_part, part in enumerate(parts, 1):
+            if reporter:
+                reporter.page(n_part, len(parts),
+                              stage="разбор альбома: нарезка документов")
             title = part["title"]
             pages = part["last_page"] - part["first_page"] + 1
             doc_type, reason = classify(title)

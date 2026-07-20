@@ -18,6 +18,21 @@ main.resolve_path), а изоляция сессий друг от друга д
 Сборка конфига живёт именно здесь, а не в server.py, потому что требует pyyaml -
 а web_app по замыслу работает на одной стандартной библиотеке.
 
+ОЧЕРЕДЬ К ИИ ЖИВЁТ ЗДЕСЬ, А НЕ ВОКРУГ ВСЕГО ПРОГОНА. Скриптовая стадия
+(извлечение, чекеры, сверка связок) считает локальный процессор, и две сессии
+друг другу не мешают - их незачем выстраивать в очередь вовсе. А вот к LM Studio
+пропускается строго одна: сервер ИИ на всех один. Поэтому перед стадией агентов
+пайплайн зовёт llm_gate (см. main.run_pipeline), а здесь этот gate реализован
+самым простым надёжным способом: процесс печатает в stdout маркер LLM_WAIT_MARKER
+и ЗАМИРАЕТ на чтении своего stdin. Родитель, который и так читает наш stdout
+построчно, видит маркер, дожидается освобождения слота и пишет нам строку в stdin
+- после чего мы идём дальше.
+
+Почему именно так, а не через файл-семафор или сокет: канал между этими двумя
+процессами уже есть и уже читается построчно, а блокировка на read() снимается
+сама собой, если родитель нас убьёт (отмена) - никакого состояния на диске,
+которое пришлось бы подчищать после падения сервера.
+
 Аргументы: путь к JSON-файлу с параметрами запуска (см. queue_worker.py).
 Пишет строки лога в stdout (их построчно читает и ретранслирует родительский
 процесс) и результат - в файл рядом, <args>.result.json:
@@ -37,6 +52,24 @@ sys.path.insert(0, str(ANALYZER_DIR))
 import main as pipeline              # noqa: E402
 from ingest import ExtractionError    # noqa: E402
 from validation import JSONValidationError  # noqa: E402
+
+# Маркер "скрипты отработали, жду очереди к серверу ИИ". Родитель ловит эту
+# строку в нашем stdout и отвечает строкой в наш stdin, когда слот свободен.
+LLM_WAIT_MARKER = "@@LLM_WAIT"
+
+
+def wait_for_llm_slot():
+    """llm_gate для run_pipeline: отпроситься у родителя на стадию агентов.
+
+    Если stdin закрыт (запустили раннер руками из консоли, без веб-интерфейса) -
+    идём дальше не спрашивая: очередь есть только там, где есть кому её вести.
+    """
+    print(LLM_WAIT_MARKER, flush=True)
+    try:
+        if sys.stdin is None or sys.stdin.readline() == "":
+            return
+    except (OSError, ValueError):
+        return
 
 
 def build_session_config(base_config_path, paths: dict, out_path) -> str:
@@ -85,11 +118,14 @@ def main():
         config_path = build_session_config(
             args["base_config_path"], args["paths"], args["session_config_path"])
 
+        skip_agents = bool(args.get("skip_agents"))
         merged = pipeline.run_pipeline(
             config_path=config_path,
             doc_types=args.get("doc_types") or None,
-            skip_agents=bool(args.get("skip_agents")),
+            skip_agents=skip_agents,
             clear_previous=bool(args.get("clear_previous")),
+            # в режиме "без ИИ" очередь не нужна: до агентов дело не дойдёт
+            llm_gate=None if skip_agents else wait_for_llm_slot,
         )
         result["ok"] = True
         result["n_findings"] = len(merged.get("errors", []))

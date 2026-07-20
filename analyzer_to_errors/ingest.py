@@ -438,7 +438,20 @@ def run_extraction(base_files_dir, scripts_dir, data_dir, overrides: dict = None
     if not docs:
         raise ExtractionError(f"В {base_files_dir} нет файлов для анализа")
 
+    # Сообщения о ходе разбора интерфейсу. Модуль лежит в папке скриптов (она
+    # копируется в каждую сессию), поэтому грузим по пути. Не нашёлся - работаем
+    # молча: прогресс-бар не повод ронять извлечение.
+    try:
+        import importlib.util as _ilu
+        _gspec = _ilu.spec_from_file_location("_progress", scripts_dir / "progress.py")
+        _progress = _ilu.module_from_spec(_gspec)
+        _gspec.loader.exec_module(_progress)
+    except Exception:  # noqa: BLE001
+        _progress = None
+
+    to_extract = [d for d in docs if d["doc_type"] is not None]
     documents, skipped = [], []
+    done = 0
     for doc in docs:
         if doc["doc_type"] is None:
             logger.warning("Пропущен %s: %s", doc["source"].name, doc["skip_reason"])
@@ -447,7 +460,12 @@ def run_extraction(base_files_dir, scripts_dir, data_dir, overrides: dict = None
                 "reason": doc["skip_reason"],
             })
             continue
+        done += 1
+        if _progress:
+            _progress.document(done, len(to_extract), doc["name"], doc["doc_type"])
         documents.append(extract_document(doc, scripts_dir, data_dir, overwrite))
+    if _progress:
+        _progress.done()
 
     ok = [d for d in documents if d["status"] in ("ok", "partial")]
     if not ok:

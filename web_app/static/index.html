@@ -14,7 +14,7 @@
       <h1>Анализатор проектной документации</h1>
       <div class="sub">Проверка EPLAN-схем и таблиц подключений на ошибки</div>
     </div>
-    <span class="version-badge" id="version-badge">V1.3</span>
+    <span class="version-badge" id="version-badge">V1.5 Alpha</span>
   </header>
 
   <main>
@@ -37,8 +37,9 @@
           <div class="file-empty" id="session-empty">Сессий пока нет.
             Создайте первую — она станет вашим комплектом документов на проверку.</div>
           <div class="hint-text">Сессии общие для всех: любой сотрудник видит чужие,
-            может открыть отчёт и снять сессию с очереди. Анализ выполняется строго
-            по одной сессии за раз — сервер ИИ один на всех.</div>
+            может открыть отчёт и снять сессию с очереди. Скриптовая часть анализа
+            запускается сразу и считается параллельно; в очередь сессия встаёт
+            только перед стадией нейросетей — сервер ИИ один на всех.</div>
         </div>
       </section>
     </div>
@@ -81,22 +82,24 @@
 
             <div class="run-wrap">
               <div class="split" style="width:100%">
-                <button class="btn-primary" id="run-btn" disabled>Поставить в очередь</button>
+                <button class="btn-primary" id="run-btn" disabled>Запустить анализ</button>
                 <button class="btn-primary split-toggle" id="run-toggle" disabled>▾</button>
               </div>
               <div class="run-menu" id="run-menu">
                 <button data-mode="full">
                   <b>Полный анализ (скрипты + ИИ)</b>
-                  <span>Извлечение, детерминированный чекер и ИИ-агенты. Дольше, требует сервера ИИ.</span>
+                  <span>Извлечение и детерминированные чекеры — сразу. Перед стадией
+                    нейросетей сессия встанет в очередь: сервер ИИ один на всех.</span>
                 </button>
                 <button data-mode="scripts">
                   <b>Без ИИ — только скрипты</b>
-                  <span>Извлечение и детерминированные чекеры. Быстро, ИИ не нужен.</span>
+                  <span>Извлечение и детерминированные чекеры. Быстро, ИИ не нужен,
+                    в очереди не ждёт.</span>
                 </button>
               </div>
             </div>
-            <div class="hint-text">Сессия встаёт в общую очередь. Вкладку можно закрыть —
-              результат дождётся вас в списке сессий.</div>
+            <div class="hint-text">Вкладку можно закрыть — результат дождётся вас
+              в списке сессий.</div>
 
             <div class="status-bar hidden" id="status-bar">
               <div class="spinner" id="status-spinner"></div>
@@ -139,7 +142,12 @@
       <!-- ОТЧЁТ -->
       <section id="report-section">
         <div class="card">
-          <div class="card-head"><span class="accent"></span><h2>Отчёт по найденным замечаниям</h2></div>
+          <div class="card-head">
+            <span class="accent"></span><h2>Отчёт по найденным замечаниям</h2>
+            <button class="btn head-action" id="btn-report-pdf"
+                    title="Скачать отчёт одним PDF: в начале — описание того, что и как проверялось">
+              Скачать PDF</button>
+          </div>
           <div class="card-body">
             <div class="report-summary" id="report-summary"></div>
             <div class="report-stats" id="report-stats"></div>
@@ -149,9 +157,23 @@
       </section>
     </div>
 
+    <!-- ФРАГМЕНТ ЧЕРТЕЖА У НАХОДКИ -->
+    <div class="frag-modal" id="frag-modal">
+      <div class="frag-window">
+        <div class="frag-bar">
+          <div>
+            <div class="frag-name" id="frag-title"></div>
+            <div class="frag-note" id="frag-sub"></div>
+          </div>
+          <button class="btn btn-ghost" id="frag-close">Закрыть</button>
+        </div>
+        <div class="frag-body" id="frag-body"></div>
+      </div>
+    </div>
+
     <footer class="app-footer">
       <b>ИНДУСТРИЯ МАНИПУЛЯТОР</b> · Анализатор проектной документации ·
-      <span id="footer-version">V1.3</span>
+      <span id="footer-version">V1.5 Alpha</span>
     </footer>
   </main>
 

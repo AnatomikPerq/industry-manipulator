@@ -1,22 +1,33 @@
 #!/usr/bin/env python3
 """
-Очередь прогонов: один воркер, строго по одной сессии за раз.
+Исполнение прогонов: скрипты - сразу, к серверу ИИ - по очереди.
 
-Почему очередь, а не параллельный запуск: LM Studio на всех один, и стадия
-агентов - это одна модель, которая физически не может считать две сессии
-одновременно. Пытаться - значит получить два прогона, дерущихся за одну
-видеокарту, и оба медленнее, чем последовательные. Поэтому сессии выстраиваются
-в глобальную очередь: пользователь ставит свою и уходит, результат ждёт его в
-списке сессий.
+ЧТО ЗДЕСЬ ГЛАВНОЕ. Раньше в очередь вставал ВЕСЬ прогон, и это было неверно.
+Прогон состоит из двух совершенно разных по природе стадий:
 
-WORKERS вынесен в константу как задел, но параллелизм НЕ реализован: изоляция
-по путям (см. sessions.py) его выдержит, а вот LM Studio - нет. Поднимать
-значение можно только вместе с проверкой, что стадия агентов сериализована
-отдельным семафором.
+  * СКРИПТЫ (извлечение PDF, детерминированные чекеры, сверка связок) - считают
+    локальный процессор, идут секунды-минуты и друг другу не мешают ничем;
+  * АГЕНТЫ - это LM Studio, и он на всех один. Две сессии, пущенные к нему
+    разом, дерутся за одну видеокарту и обе идут медленнее, чем шли бы
+    по очереди.
 
-Прогон исполняется отдельным процессом (_pipeline_runner.py), а не в этом
-потоке - только так отмена может оборвать его мгновенно, убив всё дерево
-процессов, а не дожидаясь, пока пайплайн заметит просьбу остановиться.
+Выстраивая в очередь целиком, мы заставляли человека ждать чужой сорокаминутной
+работы с моделью ради находок чекера, которые считаются за секунды и никакой
+модели не требуют. Тем более что режим «без ИИ — только скрипты» ждал в той же
+очереди, хотя к серверу ИИ не обращается вовсе.
+
+Теперь очередей две:
+  * СКРИПТОВЫЙ ПУЛ (SCRIPT_WORKERS) - сессия начинает считаться сразу, если есть
+    свободный воркер. Пул не бесконечный: у машины конечное число ядер, и
+    десять одновременных разборов альбома по 300 листов просто загрузят диск.
+  * СЛОТ ИИ (ровно один) - его сессия занимает ТОЛЬКО на стадию агентов.
+    Дойдя до неё, подпроцесс печатает маркер и замирает на своём stdin;
+    воркер ставит сессию в llm-очередь, а когда слот освободится, отвечает
+    строкой в stdin - и агенты стартуют. См. _pipeline_runner.wait_for_llm_slot.
+
+Прогон исполняется отдельным процессом, а не в этом потоке - только так отмена
+может оборвать его мгновенно, убив всё дерево процессов, а не дожидаясь, пока
+пайплайн заметит просьбу остановиться.
 """
 
 import json
@@ -35,7 +46,23 @@ from sessions import SessionError
 HERE = Path(__file__).resolve().parent
 RUNNER_SCRIPT = HERE / "_pipeline_runner.py"
 
-WORKERS = 1
+# Сколько сессий считают скрипты одновременно. Скриптовая стадия упирается в
+# процессор и диск, а не в сеть: смысл поднимать это значение есть ровно до
+# числа ядер. Четыре - осторожная величина для рабочей станции бюро; на сервере
+# её можно поднять, ничего в коде не меняя (изоляция сессий - по путям).
+SCRIPT_WORKERS = 4
+
+# Слот к серверу ИИ ровно один и поднимать его нельзя: LM Studio на всех один.
+# Если однажды серверов станет несколько, поднимать надо ЗДЕСЬ и раздавать
+# воркеру адрес занятого слота, а не просто увеличивать число.
+LLM_SLOTS = 1
+
+# Маркер, которым подпроцесс просится на стадию агентов (см. _pipeline_runner).
+LLM_WAIT_MARKER = "@@LLM_WAIT"
+
+# Маркер сообщения о ходе разбора (см. data/base_analysis_scripts/progress.py).
+# Такие строки в лог НЕ кладутся: альбом на 300 листов дал бы 300 строк шума.
+PROGRESS_MARKER = "@@PROGRESS"
 
 
 def kill_process_tree(proc):
@@ -58,39 +85,44 @@ def kill_process_tree(proc):
 
 
 class AnalysisQueue:
-    """Глобальная очередь сессий с одним рабочим потоком.
+    """Пул скриптовых воркеров + один слот к серверу ИИ.
 
     Единственный источник правды о статусе - session.json на диске (см.
-    sessions.py). В памяти лежат только очередь ожидающих и хэндл текущего
-    процесса: всё, что нужно, чтобы отменить прогон и чтобы после перезапуска
-    сервера ничего не потерялось.
+    sessions.py). В памяти лежат только очереди и хэндлы текущих процессов:
+    всё, что нужно, чтобы отменить прогон и чтобы после перезапуска сервера
+    ничего не потерялось.
     """
 
     def __init__(self, store, base_config_path):
         self.store = store
         self.base_config_path = str(base_config_path)
         self._cv = threading.Condition()
-        self._queue = deque()             # id сессий, ждущих своей очереди
-        self._running_id = None
-        self._proc = None
-        self._cancelled = set()           # id, для которых пришла отмена
-        self._thread = None
+
+        self._pending = deque()        # ждут свободного скриптового воркера
+        self._running = {}             # id сессии -> Popen
+        self._llm_queue = deque()      # id сессий, ждущих слота к ИИ
+        self._llm_busy = 0             # сколько слотов ИИ занято
+        self._cancelled = set()        # id, для которых пришла отмена
+        self._threads = []
+        self._progress_written = {}    # id -> когда прогресс последний раз лёг на диск
 
     # ---------- запуск ----------
 
     def start(self):
-        """Поднимает воркера и возвращает очередь в то состояние, в котором её
+        """Поднимает воркеров и возвращает очередь в то состояние, в котором её
         застал перезапуск сервера."""
         for meta in self.store.restore_after_restart():
-            self._queue.append(meta["id"])
-        self._thread = threading.Thread(target=self._worker, daemon=True)
-        self._thread.start()
+            self._pending.append(meta["id"])
+        for _ in range(SCRIPT_WORKERS):
+            t = threading.Thread(target=self._worker, daemon=True)
+            t.start()
+            self._threads.append(t)
 
     # ---------- публичное API ----------
 
     def enqueue(self, session_id, mode) -> int:
-        """Ставит сессию в очередь и возвращает её позицию (1 - следующая на
-        очереди; 0 означает, что воркер свободен и возьмёт её сейчас же)."""
+        """Ставит сессию на исполнение и возвращает её позицию в скриптовой
+        очереди (0 - есть свободный воркер, начнём считать сейчас же)."""
         meta = self.store.get(session_id)
         if meta["status"] in ("queued", "running"):
             raise SessionError("Сессия уже в очереди или выполняется", 409)
@@ -99,36 +131,43 @@ class AnalysisQueue:
 
         self.store.update(session_id, status="queued", mode=mode,
                           queued_at=time.time(), started_at=None, finished_at=None,
-                          n_findings=None, error=None)
+                          n_findings=None, error=None, stage=None, progress=None,
+                          llm_position=None)
         with self._cv:
             self._cancelled.discard(session_id)
-            self._queue.append(session_id)
-            position = len(self._queue) - (0 if self._running_id else 1)
+            self._pending.append(session_id)
+            free = max(SCRIPT_WORKERS - len(self._running), 0)
+            position = max(len(self._pending) - free, 0)
             self._cv.notify()
-        self.store.append_log(session_id, "=== Сессия поставлена в очередь ===")
-        return max(position, 0)
+        self.store.append_log(session_id, "=== Сессия принята к исполнению ===")
+        return position
 
     def cancel(self, session_id) -> None:
-        """Отмена и из очереди, и на ходу.
+        """Отмена на любой стадии: в очереди, на скриптах, в ожидании ИИ, на ИИ.
 
-        Из очереди - просто выбрасываем id, ничего убивать не надо. На ходу -
-        убиваем дерево процессов; довести сессию до статуса cancelled и подчистить
+        Из очереди - просто выбрасываем id, убивать нечего. На ходу - убиваем
+        дерево процессов; довести сессию до статуса cancelled и подчистить
         недописанный output/ - работа самого воркера, он как раз ждёт на чтении
-        stdout убитого процесса."""
+        stdout убитого процесса. Ожидание слота ИИ обрывается тем же убийством:
+        подпроцесс висит на read() своего stdin, и смерть процесса снимает это
+        ожидание вернее любого флага.
+        """
         with self._cv:
-            if session_id in self._queue:
-                self._queue.remove(session_id)
+            if session_id in self._pending:
+                self._pending.remove(session_id)
                 self._cancelled.add(session_id)
                 self.store.update(session_id, status="cancelled",
-                                  finished_at=time.time(),
+                                  finished_at=time.time(), stage=None, progress=None,
                                   error="Сессия снята с очереди пользователем")
                 self.store.append_log(session_id, "=== Сессия снята с очереди ===")
                 return
-            if self._running_id != session_id:
+            if session_id not in self._running:
                 raise SessionError("Эта сессия сейчас не в очереди и не выполняется", 409)
             first_request = session_id not in self._cancelled
             self._cancelled.add(session_id)
-            proc = self._proc
+            if session_id in self._llm_queue:
+                self._llm_queue.remove(session_id)
+            proc = self._running.get(session_id)
         if first_request:
             self.store.append_log(
                 session_id,
@@ -136,52 +175,88 @@ class AnalysisQueue:
         kill_process_tree(proc)
 
     def snapshot(self) -> dict:
-        """Что сейчас в работе и кто за кем стоит - для списка сессий."""
+        """Что сейчас считается и кто чего ждёт - для списка сессий."""
         with self._cv:
             return {
-                "running_id": self._running_id,
-                "queued": list(self._queue),
+                "running": sorted(self._running),
+                "queued": list(self._pending),
+                "llm_queue": list(self._llm_queue),
+                "llm_busy": self._llm_busy,
             }
 
     def positions(self) -> "OrderedDict":
-        """{id сессии: её номер в очереди, начиная с 1}."""
+        """{id сессии: её номер в скриптовой очереди, начиная с 1}."""
         with self._cv:
-            return OrderedDict((sid, i + 1) for i, sid in enumerate(self._queue))
+            return OrderedDict((sid, i + 1) for i, sid in enumerate(self._pending))
+
+    def llm_positions(self) -> "OrderedDict":
+        """{id сессии: её номер в очереди К СЕРВЕРУ ИИ, начиная с 1}."""
+        with self._cv:
+            return OrderedDict((sid, i + 1) for i, sid in enumerate(self._llm_queue))
 
     # ---------- воркер ----------
 
     def _worker(self):
         while True:
             with self._cv:
-                while not self._queue:
+                while not self._pending:
                     self._cv.wait()
-                session_id = self._queue.popleft()
+                session_id = self._pending.popleft()
                 if session_id in self._cancelled:
                     continue          # отменили, пока ждала очереди
-                self._running_id = session_id
+                self._running[session_id] = None
             try:
                 self._run_session(session_id)
             except Exception as e:  # noqa: BLE001 - воркер обязан пережить любую сессию
                 try:
                     self.store.append_log(session_id, f"!!! Сбой прогона: {e}")
                     self.store.update(session_id, status="error", error=str(e),
-                                      finished_at=time.time())
+                                      finished_at=time.time(), stage=None, progress=None)
                 except SessionError:
                     pass              # папку сессии могли удалить руками
             finally:
                 with self._cv:
-                    self._running_id = None
-                    self._proc = None
+                    self._running.pop(session_id, None)
+                    if session_id in self._llm_queue:
+                        self._llm_queue.remove(session_id)
                     self._cancelled.discard(session_id)
+                    self._cv.notify_all()
 
     def _is_cancelled(self, session_id) -> bool:
         with self._cv:
             return session_id in self._cancelled
 
+    # ---------- слот к серверу ИИ ----------
+
+    def _acquire_llm(self, session_id) -> bool:
+        """Дождаться своей очереди к серверу ИИ. False - отменили, пока ждали."""
+        with self._cv:
+            self._llm_queue.append(session_id)
+            while True:
+                if session_id in self._cancelled:
+                    if session_id in self._llm_queue:
+                        self._llm_queue.remove(session_id)
+                    return False
+                first = self._llm_queue[0] if self._llm_queue else None
+                if first == session_id and self._llm_busy < LLM_SLOTS:
+                    self._llm_queue.popleft()
+                    self._llm_busy += 1
+                    return True
+                self._cv.wait(timeout=1.0)
+
+    def _release_llm(self):
+        with self._cv:
+            if self._llm_busy > 0:
+                self._llm_busy -= 1
+            self._cv.notify_all()
+
+    # ---------- один прогон ----------
+
     def _run_session(self, session_id):
         meta = self.store.get(session_id)
         mode = meta.get("mode") or "full"
-        self.store.update(session_id, status="running", started_at=time.time())
+        self.store.update(session_id, status="running", started_at=time.time(),
+                          stage="скрипты")
 
         paths = self.store.prepare_run(session_id)
         log = lambda line: self.store.append_log(session_id, line)  # noqa: E731
@@ -208,6 +283,9 @@ class AnalysisQueue:
         args_path.write_text(json.dumps(args, ensure_ascii=False), encoding="utf-8")
 
         popen_kwargs = dict(
+            # stdin нужен, чтобы отпускать подпроцесс на стадию агентов:
+            # он ждёт нашей строки, а не опрашивает файл-семафор
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace",
             env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"},
@@ -223,18 +301,33 @@ class AnalysisQueue:
         except OSError as e:
             log(f"!!! Не удалось запустить процесс анализа: {e}")
             self.store.update(session_id, status="error", error=str(e),
-                              finished_at=time.time())
+                              finished_at=time.time(), stage=None)
             shutil.rmtree(tmp_dir, ignore_errors=True)
             return
 
         with self._cv:
-            self._proc = proc
+            self._running[session_id] = proc
         if self._is_cancelled(session_id):   # отмена успела прийти в щель до старта
             kill_process_tree(proc)
 
-        for line in proc.stdout:
-            log(line.rstrip("\n"))
-        proc.wait()
+        held_llm = False
+        try:
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+
+                if line.startswith(PROGRESS_MARKER):
+                    self._note_progress(session_id, line)
+                    continue
+
+                if line.startswith(LLM_WAIT_MARKER):
+                    held_llm = self._pass_llm_gate(session_id, proc, log)
+                    continue
+
+                log(line)
+            proc.wait()
+        finally:
+            if held_llm:
+                self._release_llm()
 
         cancelled = self._is_cancelled(session_id)
         result = None
@@ -251,24 +344,95 @@ class AnalysisQueue:
             log("=== Частичные результаты отменённого прогона очищены ===")
             self.store.update(session_id, status="cancelled",
                               error="Анализ отменён пользователем",
-                              finished_at=time.time())
+                              finished_at=time.time(), stage=None, progress=None,
+                              llm_position=None)
             return
 
         if result is not None and result.get("ok"):
             n = result.get("n_findings")
             log(f"=== Готово. Найдено замечаний: {n} ===")
             self.store.update(session_id, status="done", n_findings=n,
-                              error=None, finished_at=time.time())
+                              error=None, finished_at=time.time(),
+                              stage=None, progress=None, llm_position=None)
             return
 
         if result is not None and not result.get("ok"):
             err = result.get("error") or "неизвестная ошибка"
             log("!!! " + err)
             self.store.update(session_id, status="error", error=err,
-                              finished_at=time.time())
+                              finished_at=time.time(), stage=None, progress=None,
+                              llm_position=None)
             return
 
         # процесс завершился, не оставив result.json - упал неожиданно
         err = f"процесс анализа неожиданно завершился (код {proc.returncode})"
         log("!!! " + err)
-        self.store.update(session_id, status="error", error=err, finished_at=time.time())
+        self.store.update(session_id, status="error", error=err,
+                          finished_at=time.time(), stage=None, progress=None,
+                          llm_position=None)
+
+    def _pass_llm_gate(self, session_id, proc, log) -> bool:
+        """Подпроцесс досчитал скрипты и просится к серверу ИИ.
+
+        Возвращает True, если слот занят нами и его надо будет отпустить.
+        """
+        self.store.update(session_id, stage="очередь к ИИ", progress=None)
+        log("=== Скрипты отработали. Ожидание очереди к серверу ИИ ===")
+
+        if not self._acquire_llm(session_id):
+            return False        # отменили, пока стояли в очереди
+
+        self.store.update(session_id, stage="ИИ", llm_position=None)
+        log("=== Очередь подошла: запуск анализа нейросетями ===")
+        try:
+            proc.stdin.write("go\n")
+            proc.stdin.flush()
+        except (OSError, ValueError):
+            pass                # процесс уже мёртв - воркер увидит это на stdout
+        return True
+
+    def _note_progress(self, session_id, line):
+        """Строка @@PROGRESS от парсера -> поле progress в session.json.
+
+        В лог такие строки не идут: на альбоме их триста штук, и читать после
+        них настоящий лог было бы нельзя.
+        """
+        try:
+            payload = json.loads(line[len(PROGRESS_MARKER):].strip())
+        except (json.JSONDecodeError, ValueError):
+            return
+        kind = payload.get("kind")
+
+        # Придерживаем запись: листы летят по десятку в секунду, а браузер
+        # опрашивает статус раз в секунду - чаще писать файл незачем. Смену
+        # документа и конец работы пишем всегда: их пропуск был бы виден.
+        if kind == "page":
+            last = self._progress_written.get(session_id, 0.0)
+            if time.monotonic() - last < 0.4:
+                return
+        self._progress_written[session_id] = time.monotonic()
+
+        try:
+            if kind == "done":
+                self.store.update(session_id, progress=None)
+                return
+            meta = self.store.get(session_id)
+            progress = dict(meta.get("progress") or {})
+            if kind == "document":
+                # новый документ - счётчик листов прежнего больше не о чём
+                progress.update(document=payload.get("name"),
+                                doc_type=payload.get("doc_type"),
+                                doc_index=payload.get("index"),
+                                doc_total=payload.get("total"),
+                                page=None, page_total=None, stage=None)
+            elif kind == "page":
+                progress.update(page=payload.get("page"),
+                                page_total=payload.get("total"),
+                                stage=payload.get("stage"))
+            elif kind == "stage":
+                progress.update(stage=payload.get("stage"), page=None, page_total=None)
+            else:
+                return
+            self.store.update(session_id, progress=progress)
+        except SessionError:
+            pass                # сессию удалили прямо во время прогона

@@ -1,0 +1,82 @@
+"""
+Сообщения о ходе разбора: какой документ и какой его лист считается прямо сейчас.
+
+ЗАЧЕМ. Скриптовая стадия на альбоме идёт минутами, и всё это время интерфейс
+показывал одну неподвижную строку «Идёт анализ…». Понять, движется работа или
+повисла, было нельзя - а разбор трёхсот листов выглядит одинаково в обоих
+случаях. Теперь парсер называет лист, который читает.
+
+ПОЧЕМУ ЧЕРЕЗ STDOUT, А НЕ ЧЕРЕЗ ФАЙЛ ИЛИ ОЧЕРЕДЬ. Прогон исполняется отдельным
+процессом (web_app/_pipeline_runner.py), и родительский процесс уже читает его
+stdout построчно, чтобы складывать лог сессии. Другого канала между ними нет и
+заводить его не за чем: парсеру не нужно знать ни про сессии, ни про их папки,
+ни про веб-интерфейс - он просто печатает строку. CLI эти строки тоже печатает,
+и там они читаются глазами не хуже прочего лога.
+
+Формат - префикс-маркер и JSON следом:
+    @@PROGRESS {"kind": "page", "page": 42, "total": 184}
+Строки с маркером родитель разбирает и в лог НЕ кладёт (иначе лист на триста
+страниц дал бы триста строк шума). Всё, что маркера не имеет, - обычный лог.
+
+Про ИИ здесь сознательно ничего нет: агент сам решает, какой файл открыть и в
+каком порядке, никакой «текущей страницы» у него не существует, и придумывать
+ему прогресс-бар значило бы рисовать пользователю неправду.
+"""
+
+import json
+import sys
+
+MARKER = "@@PROGRESS"
+
+# Порог, с которого сообщать о каждом листе. На документе в два-три листа строка
+# «лист 2 из 3» мигнёт и исчезнет раньше, чем её прочтут, а поллинг интерфейса
+# идёт раз в секунду - смысла в ней нет. Долгими бывают альбомы.
+MIN_PAGES_TO_REPORT = 4
+
+
+def emit(**fields) -> None:
+    """Одно сообщение о ходе работы. Никогда не роняет разбор."""
+    try:
+        sys.stdout.write(MARKER + " " + json.dumps(fields, ensure_ascii=False) + "\n")
+        sys.stdout.flush()
+    except Exception:  # noqa: BLE001 - прогресс-бар не повод терять прогон
+        pass
+
+
+def page(index, total, stage=None) -> None:
+    """Читается лист index из total (index - человеческий, с единицы)."""
+    if total and total >= MIN_PAGES_TO_REPORT:
+        emit(kind="page", page=index, total=total, stage=stage)
+
+
+def document(index, total, name, doc_type=None) -> None:
+    """Начат разбор документа index из total."""
+    emit(kind="document", index=index, total=total, name=name, doc_type=doc_type)
+
+
+def stage(text) -> None:
+    """Смена стадии, у которой листов нет (сверка связок, слияние отчётов)."""
+    emit(kind="stage", stage=text)
+
+
+def done() -> None:
+    """Считать больше нечего - интерфейсу пора убрать строку прогресса."""
+    emit(kind="done")
+
+
+def load(scripts_dir=None):
+    """Этот же модуль, загруженный по пути.
+
+    Нужен коду вне base_analysis_scripts (full_project.py, ingest.py): папка
+    скриптов копируется в каждую сессию и в sys.path не лежит, поэтому обычный
+    import её не найдёт. Тот же приём, каким parsers подтягивают profiles.py.
+    """
+    import importlib.util
+    import os
+
+    here = scripts_dir or os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(
+        "_progress", os.path.join(str(here), "progress.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module

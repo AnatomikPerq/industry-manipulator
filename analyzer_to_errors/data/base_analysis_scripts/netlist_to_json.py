@@ -15,6 +15,11 @@ from collections import Counter
 from datetime import date
 import pdfplumber
 
+# Сообщения "читаю лист N" интерфейсу. Папка скриптов копируется в каждую сессию
+# и в sys.path не лежит - грузим по пути, как это делают соседние парсеры.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import progress as _progress  # noqa: E402
+
 # =========================================================================
 # БЛОК 1: ЛОГИКА ИЗВЛЕЧЕНИЯ ИЗ PDF (из extract_netlist.py)
 # =========================================================================
@@ -75,6 +80,7 @@ def extract_pdf_to_dicts(pdf_path):
     all_rows = []
     with pdfplumber.open(pdf_path) as pdf:
         for page_num, page in enumerate(pdf.pages, start=1):
+            _progress.page(page_num, len(pdf.pages), stage="чтение таблицы подключений")
             bands = data_row_bands(page)
             if not bands:
                 continue

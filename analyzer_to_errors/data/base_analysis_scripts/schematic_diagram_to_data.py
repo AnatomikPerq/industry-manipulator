@@ -40,6 +40,19 @@ except ImportError:
     profiles = _ilu.module_from_spec(_pspec)
     _pspec.loader.exec_module(profiles)
 
+# Сообщения "читаю такой-то лист" для интерфейса. Подтягивается тем же приёмом,
+# что и profiles: папка скриптов копируется в каждую сессию и в sys.path не лежит.
+try:
+    from . import progress  # type: ignore
+except ImportError:
+    import os as _os2
+    import importlib.util as _ilu2
+    _gspec = _ilu2.spec_from_file_location(
+        "progress", _os2.path.join(_os2.path.dirname(_os2.path.abspath(__file__)),
+                                   "progress.py"))
+    progress = _ilu2.module_from_spec(_gspec)
+    _gspec.loader.exec_module(progress)
+
 
 # ============================================================
 # ЧАСТЬ 1: сырое извлечение (текст + вектора) из PDF
@@ -274,6 +287,7 @@ def extract_raw(pdf_path):
     doc = fitz.open(pdf_path)
     pages = []
     for i, page in enumerate(doc):
+        progress.page(i + 1, len(doc), stage="чтение схемы")
         pages.append(extract_raw_page(page, i + 1, font_fix_map))
         print(f"  [raw] page {i+1}/{len(doc)}: "
               f"{len(pages[-1]['text_spans'])} spans, "
@@ -468,6 +482,49 @@ def _filter_wire_candidates(lines, page_width, page_height):
             continue
         candidates.append(l)
     return candidates, bbox
+
+
+# Сколько штрихованных линий должно быть на листе, чтобы считать их проводами
+# и выбросить волосяные (width=0). См. drop_glyph_hairlines.
+MIN_STROKED_WIRES = 20
+
+
+def drop_glyph_hairlines(lines):
+    """Выбрасывает КОНТУРЫ БУКВ, оставляя настоящие провода.
+
+    CAD-экспорт кладёт текст на лист двумя способами: шрифтом (тогда это
+    text_span) и КРИВЫМИ - обводкой каждой буквы. Обводка приезжает сюда как
+    сотни микроскопических отрезков нулевой толщины, налепленных друг на друга.
+    Замер: на листе 10.2 файла ЩСКЗ из 7423 линий 7254 - именно такие (медиана
+    длины 2 pt, максимум 4.6), а проводов всего 169.
+
+    Для склейки цепей это яд. Отрезки буквы стыкуются между собой, буква
+    стыкуется с соседней, а подпись целиком - с проходящим рядом проводом; всё
+    сливается в один ком. Замер до/после на трёх файлах (самая большая цепь листа):
+      ЩСКЗ лист 10.2:   2837 отрезков -> 39      (лист склеивался в одну цепь)
+      ЩСКЗ лист 10.3:   5935 -> 145
+      ШУ-ТМ лист 2:     2682 -> 42
+      ША1 лист 1-2:      200 -> 200              (изменений нет)
+    Клеммы при этом не теряются ни на одном файле: их число до и после равно.
+
+    Признак - НУЛЕВАЯ ТОЛЩИНА: провод рисуют реальным пером (0.72 pt и толще),
+    а заливку контура буквы - волосяной линией. По длине отделить нельзя: на
+    ШУ-ТМ контуры букв бывают до 14 pt, а провода - от 1.6 pt.
+
+    ЗАЩИТА ОТ ОБРАТНОГО СЛУЧАЯ: если бюро чертит провода волосяной линией,
+    штрихованных линий на листе почти не окажется - тогда фильтр не применяется
+    и поведение остаётся прежним. Молча остаться без проводов вовсе - хуже,
+    чем работать по замусоренным.
+
+    ЖИВЁТ ЗДЕСЬ, а не в schematic_connectivity.py, где был написан: тот скрипт
+    импортирует этот, а не наоборот, и второму потребителю (поиск пересечений
+    ниже) нужна ровно эта функция. Копировать её - значит гарантированно
+    разъехаться с оригиналом на первой же правке порогов.
+    """
+    stroked = [l for l in lines if (l.get("width") or 0) > 0]
+    if len(stroked) < MIN_STROKED_WIRES:
+        return lines, 0
+    return stroked, len(lines) - len(stroked)
 
 
 def _chain_segments(lines):
@@ -804,24 +861,85 @@ def _seg_intersect(l1, l2, eps=1e-9):
     return (ax1 + t * d1x, ay1 + t * d1y)
 
 
+# Сторона ячейки сетки-индекса, pt. Провода на схеме отстоят друг от друга на
+# единицы-десятки pt, так что при таком шаге в ячейке оказываются единицы
+# отрезков. Величина влияет ТОЛЬКО на скорость: любой шаг даёт один и тот же
+# ответ, потому что решает по-прежнему _seg_intersect.
+GRID_CELL = 20.0
+
+
+def _bbox_grid(lines):
+    """Индекс "ячейка сетки -> номера отрезков, чей bbox её задевает"."""
+    grid = defaultdict(list)
+    for i, l in enumerate(lines):
+        cx0 = int(min(l["x1"], l["x2"]) // GRID_CELL)
+        cx1 = int(max(l["x1"], l["x2"]) // GRID_CELL)
+        cy0 = int(min(l["y1"], l["y2"]) // GRID_CELL)
+        cy1 = int(max(l["y1"], l["y2"]) // GRID_CELL)
+        for cx in range(cx0, cx1 + 1):
+            for cy in range(cy0, cy1 + 1):
+                grid[(cx, cy)].append(i)
+    return grid
+
+
 def find_wire_crossings(page, wire_candidates):
-    """Все X-пересечения проводов на листе + есть ли рядом точка соединения."""
+    """Все X-пересечения проводов на листе + есть ли рядом точка соединения.
+
+    ПОЧЕМУ ЗДЕСЬ ИНДЕКС, А НЕ ДВОЙНОЙ ЦИКЛ. Раньше это была честная проверка
+    всех пар: 7423 линии на листе 10.2 ЩСКЗ - это 27,5 млн вызовов
+    _seg_intersect, и стадия занимала 34,7 с из 35,2 с всего разбора схемы
+    (98,6% времени извлечения на четырёхлистовом файле; на альбоме в 184 листа
+    это часы). Причём считалось в один поток, поэтому со стороны выглядело как
+    "скрипт висит, а процессор простаивает".
+
+    Сделано две вещи, и первая важнее второй:
+
+    1. КОНТУРЫ БУКВ ВЫБРАСЫВАЮТСЯ (drop_glyph_hairlines). Из тех 7423 "проводов"
+       7254 были обводкой текста - и пересекались они сами с собой. Отсюда и
+       13901 "пересечение" на файле, где проводов всего несколько сотен: список
+       wire_crossings_without_dot был мусором, о чём приходилось отдельно
+       предупреждать агента в промпте. Соседний скрипт связности выбрасывает их
+       с самого начала (там они склеивали весь лист в одну цепь) - здесь этого
+       просто забыли сделать. n падает в ~44 раза, число пар - в ~1900.
+    2. ПАРЫ ПЕРЕБИРАЮТСЯ ПО СЕТКЕ. Два отрезка могут пересечься, только если
+       их bbox'ы задевают общую ячейку. Это оставляет запас прочности на бюро,
+       которое чертит провода волосяной линией: там фильтр из п.1 сам себя
+       отключает, и без индекса вернулись бы прежние минуты.
+
+    Геометрия НЕ ТРОНУТА: решает тот же _seg_intersect, изменился только
+    порядок перебора пар. Ответ побитово тот же, что дал бы двойной цикл по
+    тому же набору отрезков.
+    """
+    wires, n_hairlines = drop_glyph_hairlines(wire_candidates)
     dots = detect_junction_dots(page)
+    grid = _bbox_grid(wires)
+
     crossings = []
-    n = len(wire_candidates)
-    for i in range(n):
-        for j in range(i + 1, n):
-            pt = _seg_intersect(wire_candidates[i], wire_candidates[j])
-            if pt is None:
-                continue
-            ix, iy = pt
-            has_dot = any(_dist(ix, iy, d["x"], d["y"]) <= CROSSING_DOT_TOL for d in dots)
-            crossings.append({
-                "page": page["page_number"],
-                "x": round(ix, 2), "y": round(iy, 2),
-                "has_junction_dot": has_dot,
-            })
-    return crossings
+    seen = set()
+    for members in grid.values():
+        for a in range(len(members)):
+            i = members[a]
+            for b in range(a + 1, len(members)):
+                j = members[b]
+                # длинный провод лежит в десятке ячеек, и одну и ту же пару мы
+                # встретим столько раз, сколько ячеек у них общих
+                pair = (i, j) if i < j else (j, i)
+                if pair in seen:
+                    continue
+                seen.add(pair)
+                pt = _seg_intersect(wires[i], wires[j])
+                if pt is None:
+                    continue
+                ix, iy = pt
+                has_dot = any(_dist(ix, iy, d["x"], d["y"]) <= CROSSING_DOT_TOL
+                              for d in dots)
+                crossings.append({
+                    "page": page["page_number"],
+                    "x": round(ix, 2), "y": round(iy, 2),
+                    "has_junction_dot": has_dot,
+                })
+    crossings.sort(key=lambda c: (c["x"], c["y"]))
+    return crossings, n_hairlines
 
 
 # Обозначение клеммной колодки для проверки порядка клемм -- в profiles.py
@@ -917,7 +1035,7 @@ def build_issue_candidates(classified_pages, profile=None):
         wire_candidates, _ = _filter_wire_candidates(
             page["lines"], page["width"], page["height"])
 
-        crossings = find_wire_crossings(page, wire_candidates)
+        crossings, n_hairlines = find_wire_crossings(page, wire_candidates)
         all_crossings.extend(crossings)
 
         term_anomalies = check_terminal_order(page, profile=profile)
@@ -927,7 +1045,8 @@ def build_issue_candidates(classified_pages, profile=None):
         print(f"  [issues] page {page['page_number']}: "
               f"{len(crossings)} crossings "
               f"({sum(1 for c in crossings if c['has_junction_dot'])} with dot), "
-              f"{len(term_anomalies)} terminal-order anomalies",
+              f"{len(term_anomalies)} terminal-order anomalies, "
+              f"{n_hairlines} glyph hairlines dropped",
               file=sys.stderr)
 
     crossings_no_dot = [c for c in all_crossings if not c["has_junction_dot"]]

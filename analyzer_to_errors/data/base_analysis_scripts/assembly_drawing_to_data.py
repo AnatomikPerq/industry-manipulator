@@ -65,6 +65,7 @@ import fitz
 # же бюро набраны теми же шрифтами (GOST type B), и ломаются они одинаково.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import schematic_diagram_to_data as _sdd  # noqa: E402
+import progress as _progress  # noqa: E402  (сообщения "читаю лист N" интерфейсу)
 
 
 # ============================================================
@@ -169,6 +170,7 @@ def _extract_text_blocks(pdf_path):
     doc = fitz.open(pdf_path)
     pages = []
     for pno, page in enumerate(doc, 1):
+        _progress.page(pno, len(doc), stage="чтение сборочного чертежа")
         blocks = []
         for block in page.get_text("dict").get("blocks", []):
             if block.get("type") != 0:

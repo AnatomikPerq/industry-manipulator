@@ -89,10 +89,20 @@ async function refreshSessions() {
   const sessions = data.sessions || [];
   empty.style.display = sessions.length ? "none" : "block";
 
+  // Очередей теперь две, и говорить о них надо раздельно: скрипты считаются
+  // параллельно и почти никогда не ждут, а к серверу ИИ пропускается строго
+  // одна сессия - именно там и стоит настоящая очередь.
+  const nRunning = (data.running || []).length;
   const nQueued = (data.queued || []).length;
-  $("queue-note").textContent = data.running_id
-    ? `Сейчас выполняется одна сессия${nQueued ? `, в очереди ещё ${nQueued}` : ""}.`
-    : (nQueued ? `В очереди сессий: ${nQueued}.` : "Очередь пуста.");
+  const nLlm = (data.llm_queue || []).length;
+  const parts = [];
+  if (nRunning) parts.push(`считается сессий: ${nRunning}`);
+  if (nQueued) parts.push(`ждут свободного обработчика: ${nQueued}`);
+  if (data.llm_busy) parts.push("сервер ИИ занят");
+  if (nLlm) parts.push(`в очереди к ИИ: ${nLlm}`);
+  $("queue-note").textContent = parts.length
+    ? parts.join(" · ") + "."
+    : "Сейчас ничего не считается.";
 
   list.innerHTML = sessions.map(renderSessionCard).join("");
   list.querySelectorAll("[data-act]").forEach((btn) => {
@@ -135,9 +145,14 @@ function renderSessionCard(s) {
 }
 
 function statusBadge(s) {
-  const label = s.status === "queued" && s.queue_position
-    ? `в очереди, ${s.queue_position}-я`
-    : (STATUS_LABELS[s.status] || s.status);
+  let label = STATUS_LABELS[s.status] || s.status;
+  if (s.status === "queued" && s.queue_position) {
+    label = `в очереди, ${s.queue_position}-я`;
+  } else if (s.status === "running" && s.stage === "очередь к ИИ") {
+    label = s.llm_position ? `ждёт ИИ, ${s.llm_position}-я` : "ждёт ИИ";
+  } else if (s.status === "running" && s.stage) {
+    label = s.stage === "ИИ" ? "анализ ИИ" : "работают скрипты";
+  }
   return `<span class="status-badge st-${esc(s.status)}">${esc(label)}</span>`;
 }
 
@@ -209,6 +224,10 @@ async function loadSession() {
   S.meta = meta;
   S.files = (meta.files || []).map((f) => ({
     name: f.name, size: f.size, type: f.detected_type || "", bundle: f.bundle || "",
+    // path, а не name: имена частей, нарезанных из альбома, повторяются от
+    // шкафа к шкафу (у каждого свой «Общий вид»), и по имени сервер открыл бы
+    // или удалил не тот файл
+    path: f.path, generated: !!f.generated,
   }));
   $("crumb-name").textContent = meta.name;
   $("crumb-status").outerHTML = statusBadge(meta).replace(
@@ -221,16 +240,43 @@ function isBusy() {
   return S.meta && (S.meta.status === "queued" || S.meta.status === "running");
 }
 
+// Что именно считается прямо сейчас: стадия и, для скриптов, текущий лист.
+// Для стадии ИИ листа нет и быть не может - агент сам решает, какой файл
+// открыть и в каком порядке, и рисовать ему прогресс-бар значило бы врать.
+function progressText(m) {
+  const p = m.progress || {};
+  const bits = [];
+  if (p.doc_total > 1 && p.doc_index) bits.push(`документ ${p.doc_index} из ${p.doc_total}`);
+  if (p.document) bits.push(p.document);
+  if (p.stage) bits.push(p.stage);
+  if (p.page && p.page_total) bits.push(`лист ${p.page} из ${p.page_total}`);
+  return bits.join(" · ");
+}
+
 function renderSessionStatus() {
   const m = S.meta;
   if (!m) return;
   if (m.status === "queued") {
     setStatus(m.queue_position
-      ? `В очереди, ${m.queue_position}-я. Можно закрыть вкладку.`
-      : "В очереди. Можно закрыть вкладку.", true);
+      ? `Ожидает свободного обработчика, ${m.queue_position}-я в очереди. Можно закрыть вкладку.`
+      : "Принята к исполнению. Можно закрыть вкладку.", true);
     showCancel(true);
   } else if (m.status === "running") {
-    setStatus(`Идёт анализ… (режим: ${m.mode === "scripts" ? "без ИИ" : "полный"})`, true);
+    const mode = m.mode === "scripts" ? "без ИИ" : "полный";
+    let text;
+    if (m.stage === "очередь к ИИ") {
+      // Главное, что здесь надо сказать: скрипты УЖЕ отработали. Иначе
+      // ожидание выглядит так, будто ничего не сделано.
+      text = m.llm_position
+        ? `Скрипты отработали. Ожидание очереди к серверу ИИ, ${m.llm_position}-я.`
+        : "Скрипты отработали. Ожидание очереди к серверу ИИ.";
+    } else if (m.stage === "ИИ") {
+      text = "Анализ нейросетями…";
+    } else {
+      const detail = progressText(m);
+      text = detail ? `Работают скрипты: ${detail}` : `Идёт анализ… (режим: ${mode})`;
+    }
+    setStatus(text, true);
     showCancel(true);
   } else {
     showCancel(false);
@@ -268,6 +314,7 @@ function startSessionPolling() {
     Object.assign(S.meta, {
       status: data.status, error: data.error,
       n_findings: data.n_findings, queue_position: data.queue_position,
+      stage: data.stage, progress: data.progress, llm_position: data.llm_position,
     });
     if (data.status !== wasStatus) {
       $("crumb-status").outerHTML = statusBadge(S.meta).replace(
@@ -310,11 +357,22 @@ function renderFiles() {
     const bundle = f.bundle
       ? `<span class="fi-bundle" title="Отдельная связка (подпапка): ${esc(f.bundle)}">${esc(f.bundle)}</span>`
       : "";
+    // Часть, нарезанная из альбома, а не загруженная руками. Без этой пометки
+    // пользователь видит полтора десятка файлов, которых он не загружал, и
+    // не понимает, откуда они и можно ли их трогать.
+    const gen = f.generated
+      ? `<span class="fi-gen" title="Этот документ вырезан из загруженного альбома. Удалять по одному не нужно — при следующем запуске альбом будет нарезан заново">из альбома</span>`
+      : "";
+    // Имя - ссылка: открыть исходный документ в соседней вкладке. Это первое,
+    // что делает инженер, увидев замечание, и раньше ради этого приходилось
+    // искать файл в проводнике.
+    const href = `/api/sessions/${encodeURIComponent(S.id)}/file?path=${encodeURIComponent(f.path)}`;
     return `
       <li class="file-item">
         <span class="fi-icon">▤</span>
-        <span class="fi-name" title="${esc(f.name)}">${esc(f.name)}</span>
-        ${bundle}
+        <a class="fi-name" href="${href}" target="_blank" rel="noopener"
+           title="Открыть «${esc(f.name)}» в новой вкладке">${esc(f.name)}</a>
+        ${bundle}${gen}
         <span class="fi-size">${fmtSize(f.size)}</span>
         <select data-idx="${i}" class="${f.type ? "" : "unset"}" ${locked ? "disabled" : ""}>${opts}</select>
         <button class="fi-del" data-del="${i}" title="Удалить файл из сессии"
@@ -332,7 +390,7 @@ function renderFiles() {
     });
   });
   list.querySelectorAll("[data-del]").forEach((btn) => {
-    btn.addEventListener("click", () => deleteFile(S.files[+btn.dataset.del].name));
+    btn.addEventListener("click", () => deleteFile(S.files[+btn.dataset.del]));
   });
   updateRunEnabled();
 }
@@ -350,14 +408,14 @@ async function saveType(name, type) {
   }
 }
 
-async function deleteFile(name) {
+async function deleteFile(file) {
   try {
     await fetchJSON(`/api/sessions/${encodeURIComponent(S.id)}/file-delete`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ path: file.path }),
     });
     await loadSession();
-    logLine("Файл удалён из сессии: " + name, "warn");
+    logLine("Файл удалён из сессии: " + file.name, "warn");
   } catch (e) {
     logLine("Не удалось удалить файл: " + e.message, "err");
   }
@@ -477,11 +535,25 @@ async function showReport() {
   $("report-section").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+// Отчёт одним PDF: его пересылают, показывают на совещании и подшивают к
+// проекту. Собирает сервер (report_pdf.py) - в начало кладётся описание того,
+// что и как проверялось.
+function downloadReportPdf() {
+  if (!S.id) return;
+  window.open(`/api/sessions/${encodeURIComponent(S.id)}/report.pdf`, "_blank");
+}
+
 const SEV_LABELS = { critical: "критич.", high: "высокий", medium: "средний", low: "низкий", info: "инфо" };
 const SEV_ORDER = ["critical", "high", "medium", "low", "info"];
 
 function renderReport(data) {
   const errors = data.errors || [];
+  // Запоминаем отчёт и помечаем каждую находку её номером в общем списке:
+  // ниже находки раскладываются по двум таблицам, и после фильтрации номер
+  // строки уже не совпадает с номером находки, а кнопке «фрагмент» нужен
+  // именно он.
+  S.report = data;
+  errors.forEach((e, i) => { e.__i = i; });
   $("report-summary").textContent = data.summary || "Анализ завершён.";
 
   // статистика по важности
@@ -515,6 +587,128 @@ function renderReport(data) {
   if (bundleErrors.length) parts.push(renderBundleTable(bundleErrors));
   if (wiringErrors.length) parts.push(renderWiringTable(wiringErrors));
   $("report-body").innerHTML = parts.join("");
+
+  $("report-body").querySelectorAll("[data-frag]").forEach((btn) => {
+    btn.addEventListener("click", () => openFragments(+btn.dataset.frag));
+  });
+}
+
+// ------------------------------------------------------------
+// Фрагмент чертежа у находки
+//
+// Прочитав «обозначение QF1 есть на схеме, но его нет в спецификации», инженер
+// первым делом лезет в PDF смотреть это место. Показываем его сразу: сервер
+// ищет обозначение в исходном документе и отдаёт вырезанный кусок листа
+// с обведённым попаданием (см. analyzer_to_errors/fragment.py).
+// ------------------------------------------------------------
+
+// Документы, у которых есть листы. Спецификация приходит книгой Excel -
+// показывать в ней нечего, и кнопку для неё рисовать не надо.
+const FRAGMENT_DOC_TYPES = ["scheme", "assembly", "netlist"];
+
+function fragmentTargets(err) {
+  const seen = new Set();
+  const out = [];
+  for (const ref of err.refs || []) {
+    if (!FRAGMENT_DOC_TYPES.includes(ref.doc_type) || !ref.document) continue;
+    // Порядок ключей тот же, что в fragment.needles_from_ref: от точного
+    // (артикул) к общему (обозначение клеммника).
+    const q = ["article", "designator", "marking", "kks", "terminal_block"]
+      .map((k) => ref[k]).filter((v) => v !== null && v !== undefined && v !== "");
+    if (!q.length) continue;
+    const key = `${ref.document}|${ref.sheet}|${q[0]}`;
+    if (seen.has(key)) continue;      // дубль клеммы даёт два одинаковых ref'а
+    seen.add(key);
+    out.push({ document: ref.document, sheet: ref.sheet, q, doc_type: ref.doc_type });
+  }
+  return out;
+}
+
+function fragmentButton(err) {
+  if (!fragmentTargets(err).length) return "";
+  return `<button class="frag-btn" data-frag="${err.__i}"
+            title="Показать это место на чертеже">фрагмент</button>`;
+}
+
+async function openFragments(index) {
+  const err = ((S.report || {}).errors || [])[index];
+  if (!err) return;
+  const targets = fragmentTargets(err);
+
+  $("frag-title").textContent = err.type || "Место находки";
+  $("frag-sub").textContent = err.finding || "";
+  $("frag-body").innerHTML = `<div class="hint-text">Готовим фрагменты…</div>`;
+  $("frag-modal").classList.add("show");
+
+  // Два ref'а находки нередко приводят к ОДНОМУ И ТОМУ ЖЕ куску листа: у
+  // «изделие пропало с парного листа» второй ref указывает на лист, где
+  // изделия нет, и поиск честно возвращает тот же лист, что и первый.
+  // Картинку показываем один раз, но пометку «на листе N не найдено» с
+  // отброшенного дубля ПЕРЕНОСИМ на неё: в ней вся суть такой находки.
+  const blocks = [];
+  const byKey = new Map();      // ключ картинки -> её место в blocks
+  const missing = new Map();    // ключ картинки -> листы, где ключа не нашлось
+  for (const t of targets) {
+    const params = new URLSearchParams();
+    params.set("document", t.document);
+    if (t.sheet !== null && t.sheet !== undefined) params.set("sheet", t.sheet);
+    t.q.forEach((v) => params.append("q", v));
+    const url = `/api/sessions/${encodeURIComponent(S.id)}/fragment?${params}`;
+    const asked = `${esc(t.document)}${t.sheet != null ? `, лист ${esc(t.sheet)}` : ""}`
+                + ` — ищем ${esc(t.q[0])}`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || res.statusText);
+      }
+      // Подпись называет лист, который РЕАЛЬНО на картинке. Если на листе из
+      // находки ключа не оказалось и показан другой - говорим об этом прямо:
+      // на находках «изделие пропало с парного листа» именно отсутствие и
+      // есть суть, и молчаливая подмена листа выглядела бы её опровержением.
+      const page = res.headers.get("X-Fragment-Page");
+      const fallback = res.headers.get("X-Fragment-Fallback") === "1";
+      const key = `${t.document}|${page}|${t.q[0]}`;
+
+      if (fallback && t.sheet != null) {
+        if (!missing.has(key)) missing.set(key, new Set());
+        missing.get(key).add(String(t.sheet));
+      }
+      if (byKey.has(key)) continue;        // ту же картинку второй раз не рисуем
+
+      const src = URL.createObjectURL(await res.blob());
+      byKey.set(key, blocks.length);
+      blocks.push({
+        key,
+        head: `${esc(t.document)}, лист ${esc(page)} — ${esc(t.q[0])}`,
+        page,
+        html: `<a href="${src}" target="_blank" rel="noopener">
+                 <img src="${src}" alt="Фрагмент чертежа"></a>`,
+      });
+    } catch (e) {
+      blocks.push({ key: null, head: asked,
+                    html: `<div class="frag-fail">${esc(e.message)}</div>` });
+    }
+  }
+
+  const html = blocks.map((b) => {
+    const gone = b.key ? missing.get(b.key) : null;
+    const warn = gone && gone.size
+      ? `<span class="frag-warn">на ${gone.size > 1 ? "листах" : "листе"} `
+        + `${esc([...gone].join(", "))} не найдено — показан лист ${esc(b.page)},`
+        + ` где оно есть</span>`
+      : "";
+    return `<div class="frag-item"><div class="frag-head">${b.head}${warn}</div>
+              ${b.html}</div>`;
+  }).join("");
+
+  $("frag-body").innerHTML = html ||
+    `<div class="frag-fail">У этой находки нет документа с листами.</div>`;
+}
+
+function closeFragments() {
+  $("frag-modal").classList.remove("show");
+  $("frag-body").innerHTML = "";
 }
 
 function renderWiringTable(errors) {
@@ -617,7 +811,7 @@ function renderBundleRow(err, num) {
       ${cell(asm ? asm.article : null, true)}
       ${cell(sc && sc.sheet != null ? "лист " + sc.sheet : null)}
       ${cell(sc ? sc.article : null, true)}
-      <td class="finding">${esc(err.finding || "")}</td>
+      <td class="finding">${esc(err.finding || "")}${fragmentButton(err)}</td>
       <td class="action">${esc(err.action || "")}</td>
     </tr>`;
 }
@@ -661,7 +855,7 @@ function renderRow(err, num) {
       ${cell(sc ? sc.marking : null, true)}
       ${cell(sc ? sc.kks : null, true)}
       ${cell(sc ? sc.conductor : null, true)}
-      <td class="finding">${esc(err.finding || "")}</td>
+      <td class="finding">${esc(err.finding || "")}${fragmentButton(err)}</td>
       <td class="action">${esc(err.action || "")}</td>
     </tr>`;
 }
@@ -773,6 +967,15 @@ function bindEvents() {
   $("btn-check-llm").addEventListener("click", checkLLM);
   $("btn-show-report").addEventListener("click", showReport);
   $("btn-clear-console").addEventListener("click", () => { $("console").innerHTML = ""; });
+  $("btn-report-pdf").addEventListener("click", downloadReportPdf);
+
+  $("frag-close").addEventListener("click", closeFragments);
+  $("frag-modal").addEventListener("click", (e) => {
+    if (e.target === $("frag-modal")) closeFragments();   // клик по фону
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") closeFragments();
+  });
 }
 
 function toggleRunMenu() { $("run-menu").classList.toggle("open"); }
