@@ -8,6 +8,11 @@ venv/
 # Логи
 *.log
 
+# Локальные настройки установки: прежде всего адрес сервера ИИ. Это свойство
+# конкретной машины, а не проекта, и в общем config.yaml он неизбежно
+# оказывался чьим-то личным. Образец - config.local.example.yaml, он в гите.
+/analyzer_to_errors/config.local.yaml
+
 # Результаты анализа и промежуточные данные (генерируются при каждом прогоне)
 /analyzer_to_errors/output/
 /analyzer_to_errors/data/manifest.json

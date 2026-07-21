@@ -37,6 +37,9 @@ from collections import Counter, defaultdict
 
 # schema.py лежит в корне проекта (на уровень выше data/base_analysis_scripts).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import findings as _findings  # noqa: E402  (общая форма находки и ref'а)
+
 from schema import REPORT_SCHEMA  # noqa: E402
 
 DOC_TYPE = "netlist"
@@ -57,34 +60,24 @@ CHANNEL_TAG_RE = re.compile(r'^00[A-Z0-9]{4,}[A-Z]\d{2,3}[A-Z]?(_\d+)?$')
 
 def _ref(document, conn):
     """Одна запись нетлиста -> ref в терминах общей схемы."""
-    return {
-        "document": document,
-        "doc_type": DOC_TYPE,
-        "source_file": SOURCE_FILE,
-        "sheet": conn.get("page") if isinstance(conn.get("page"), int) else None,
-        "row": conn.get("id"),
-        "cabinet": conn.get("cabinet"),
-        "terminal_block": conn.get("terminal_block"),
-        "pin": conn.get("pin"),
-        "terminal_type": conn.get("terminal_type_or_ref"),
-        "marking": conn.get("circuit_marking"),
-        "kks": conn.get("kks"),
-        "conductor": conn.get("conductor"),
-        "found": f"строка {conn.get('id')}: адрес {conn.get('terminal_address')}",
-    }
+    return _findings.ref(
+        document, DOC_TYPE, SOURCE_FILE,
+        sheet=conn.get("page") if isinstance(conn.get("page"), int) else None,
+        row=conn.get("id"),
+        cabinet=conn.get("cabinet"),
+        terminal_block=conn.get("terminal_block"),
+        pin=conn.get("pin"),
+        terminal_type=conn.get("terminal_type_or_ref"),
+        marking=conn.get("circuit_marking"),
+        kks=conn.get("kks"),
+        conductor=conn.get("conductor"),
+        found=f"строка {conn.get('id')}: адрес {conn.get('terminal_address')}",
+    )
 
 
 def _finding(kind, severity, type_ru, refs, finding, action, evidence=None):
-    return {
-        "kind": kind,
-        "scope": "single_document",
-        "severity": severity,
-        "type": type_ru,
-        "refs": refs,
-        "finding": finding,
-        "action": action,
-        "evidence": evidence,
-    }
+    return _findings.finding(kind, severity, type_ru, refs, finding, action,
+                            evidence, scope="single_document")
 
 
 # ============================================================
@@ -309,7 +302,7 @@ RULES_BY_KIND = {
     "cable_journal": [rule_duplicate_cable],
 }
 
-SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+SEVERITY_ORDER = _findings.SEVERITY_ORDER
 
 
 def check_connections(document, connections, table_kind="gost_connections"):

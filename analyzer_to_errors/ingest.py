@@ -23,17 +23,16 @@
 и пометка в имени станет необязательной.
 """
 
-import importlib.util
 import json
 import logging
 import re
 import shutil
-import sys
 import traceback
 from datetime import datetime
 from pathlib import Path
 
 import bundles
+import script_loader
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +177,52 @@ class ExtractionError(Exception):
     """Базовый скрипт-парсер упал на конкретном документе."""
 
 
+# Отметка о том, ЧЕМ и ИЗ ЧЕГО получены данные в папке документа. Кладётся
+# рядом с ними и читается при extraction.reuse_existing.
+CACHE_FILE = ".extraction.json"
+
+
+def _source_stamp(path: Path) -> dict:
+    """Отпечаток исходного файла: по нему видно, что документ не переиздавали.
+
+    Размер и время правки, а не хэш содержимого: файл бывает на 300 МБ, а
+    читать его целиком ради решения «читать ли его целиком» - бессмысленно.
+    Подмена файла ровно того же размера в ту же секунду теоретически возможна,
+    но её накрывает обычная кнопка «загрузить заново» (веб-прогон и так всегда
+    идёт с clear_previous).
+    """
+    st = path.stat()
+    return {"mtime_ns": st.st_mtime_ns, "size": st.st_size}
+
+
+def _cached_extraction(out_dir: Path, source: Path, scripts: list):
+    """Готовые данные прошлого прогона, если они ещё годны. Иначе None.
+
+    Годны - значит: отметка на месте, исходный файл с тех пор не менялся,
+    набор парсеров тот же, извлечение тогда не падало и ВСЕ обещанные файлы
+    лежат на месте. Последнее не формальность: папку мог почистить пользователь
+    или прерванная отмена.
+    """
+    marker = out_dir / CACHE_FILE
+    if not marker.is_file():
+        return None
+    try:
+        cached = json.loads(marker.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+    if cached.get("stamp") != _source_stamp(source):
+        return None
+    if cached.get("parsers") != list(scripts):
+        return None
+    if cached.get("errors"):
+        return None
+    files = cached.get("files") or []
+    if not files or not all((out_dir / f).is_file() for f in files):
+        return None
+    return cached
+
+
 def detect_doc_type(filename: str):
     """Тип документа по имени файла. None, если определить нельзя.
 
@@ -211,8 +256,13 @@ def discover_documents(base_files_dir: Path, overrides: dict = None) -> list:
     подпапкам ("base_files/связка 1/..."), и подпапка - один из способов
     задать связку (см. bundles.py). Плоский список файлов тоже работает.
 
-    overrides: {"имя файла.pdf": "scheme"} - явная пометка типа, важнее
-    имени файла (сюда приходит выбор пользователя с сайта).
+    overrides: явная пометка типа, важнее имени файла (сюда приходит выбор
+    пользователя с сайта). Ключ - путь файла ОТНОСИТЕЛЬНО base_files
+    ("связка 1/схема.pdf") либо голое имя ("схема.pdf"). Путь пробуется первым:
+    в альбоме имена документов повторяются от шкафа к шкафу (у каждого свой
+    «Общий вид»), и по голому имени пометка одного файла применилась бы ко
+    всем одноимённым разом. Имя оставлено для .doc_types.json, написанного
+    руками для CLI, - там связка обычно одна и коллизий нет.
     """
     overrides = overrides or {}
     docs = []
@@ -235,7 +285,9 @@ def discover_documents(base_files_dir: Path, overrides: dict = None) -> list:
                                         f"{', '.join(sorted(SUPPORTED_SUFFIXES))})"})
             continue
 
-        doc_type = overrides.get(path.name) or detect_doc_type(path.name)
+        rel_key = path.relative_to(base_files_dir).as_posix()
+        doc_type = (overrides.get(rel_key) or overrides.get(path.name)
+                    or detect_doc_type(path.name))
         if doc_type is None:
             docs.append({"source": path, "doc_type": None, "name": document_name(path),
                          "skip_reason": "не удалось определить тип документа. Ожидается "
@@ -264,29 +316,12 @@ def discover_documents(base_files_dir: Path, overrides: dict = None) -> list:
 
 
 def _load_parser(scripts_dir: Path, script_name: str):
-    """Импортирует базовый скрипт-парсер по пути к файлу.
-
-    Через importlib, а не обычным import: скрипты лежат в data/, это не
-    Python-пакет, и в их именах нет гарантии валидного идентификатора.
-    """
-    script_path = scripts_dir / script_name
-    if not script_path.is_file():
-        raise ExtractionError(f"Базовый скрипт-парсер не найден: {script_path}")
-
-    module_name = f"_base_parser_{script_path.stem}"
-    if module_name in sys.modules:
-        return sys.modules[module_name]
-
-    spec = importlib.util.spec_from_file_location(module_name, script_path)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-
-    if not hasattr(module, "extract_to_dir"):
-        raise ExtractionError(
-            f"{script_name} не имеет функции extract_to_dir(pdf_path, out_dir) - "
-            "пайплайн не может его вызвать")
-    return module
+    """Базовый скрипт-парсер. Загрузка по пути - см. script_loader."""
+    try:
+        return script_loader.load(scripts_dir, script_name,
+                                  require=("extract_to_dir",))
+    except script_loader.ScriptLoadError as e:
+        raise ExtractionError(str(e))
 
 
 def _extraction_warnings(script: str, stats: dict, cumulative_stats: dict) -> list:
@@ -369,10 +404,20 @@ def _extraction_warnings(script: str, stats: dict, cumulative_stats: dict) -> li
 
 
 def extract_document(doc: dict, scripts_dir: Path, data_dir: Path,
-                     overwrite: bool = True) -> dict:
+                     reuse: bool = False) -> dict:
     """Прогоняет ОДИН документ через его базовый парсер. Возвращает запись
     для манифеста. Исключение парсера не роняет весь пайплайн - оно
-    записывается в статус документа."""
+    записывается в статус документа.
+
+    reuse (extraction.reuse_existing из config.yaml): взять данные прошлого
+    прогона, если исходный файл с тех пор не менялся. Раньше этот флаг ничего
+    подобного не делал - извлечение шло ВСЕГДА, а флаг лишь запрещал стирать
+    папку перед разбором. Толку от него не было никакого, а вред был: файлы
+    прошлого прогона оставались лежать рядом с новыми, и если новый разбор
+    падал или давал меньше файлов, чекеры и агент читали позавчерашние данные
+    как сегодняшние. Теперь папка чистится ВСЕГДА перед настоящим разбором, а
+    пропуск - настоящий пропуск.
+    """
     out_dir = data_dir / doc["name"]
 
     scripts = _scripts_for(doc["doc_type"], doc["source"])
@@ -391,7 +436,19 @@ def extract_document(doc: dict, scripts_dir: Path, data_dir: Path,
         "warnings": [],
     }
 
-    if out_dir.exists() and overwrite:
+    if reuse:
+        cached = _cached_extraction(out_dir, doc["source"], scripts)
+        if cached is not None:
+            record["files"] = list(cached["files"])
+            record["stats"] = dict(cached.get("stats") or {})
+            record["warnings"] = list(cached.get("warnings") or [])
+            record["status"] = cached.get("status") or "ok"
+            record["reused"] = True
+            logger.info("Извлечение [%s] %s: данные прошлого прогона актуальны, "
+                        "парсеры не запускались", doc["doc_type"], doc["source"].name)
+            return record
+
+    if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -428,7 +485,31 @@ def extract_document(doc: dict, scripts_dir: Path, data_dir: Path,
         # нетлиста - при статусе ok у всех пяти.
         record["status"] = "partial"
 
+    _write_cache_marker(out_dir, doc["source"], record)
     return record
+
+
+def _write_cache_marker(out_dir: Path, source: Path, record: dict) -> None:
+    """Отметка «эти данные получены из такого-то файла такими-то парсерами».
+
+    Пишется всегда, даже при ошибке разбора: следующий прогон по ней увидит,
+    что повторять нечего (при errors кэш заведомо негоден - см.
+    _cached_extraction), и не станет молча выдавать сбойный результат за
+    готовый. Сбой записи отметки не должен ронять прогон: без неё просто не
+    сработает пропуск.
+    """
+    try:
+        (out_dir / CACHE_FILE).write_text(json.dumps({
+            "stamp": _source_stamp(source),
+            "parsers": record["parsers"],
+            "files": record["files"],
+            "stats": record["stats"],
+            "warnings": record["warnings"],
+            "errors": record["errors"],
+            "status": record["status"],
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        logger.debug("Не удалось записать %s: %s", CACHE_FILE, e)
 
 
 def _extracted_nothing(doc_type: str, stats: dict) -> bool:
@@ -445,7 +526,7 @@ def _extracted_nothing(doc_type: str, stats: dict) -> bool:
 
 
 def run_extraction(base_files_dir, scripts_dir, data_dir, overrides: dict = None,
-                   overwrite: bool = True, bundle_overrides: dict = None) -> dict:
+                   reuse: bool = False, bundle_overrides: dict = None) -> dict:
     """Полная стадия извлечения: все файлы из base_files -> data/<имя>/ + manifest.json.
 
     Возвращает манифест (dict). Бросает ExtractionError, только если не
@@ -463,13 +544,7 @@ def run_extraction(base_files_dir, scripts_dir, data_dir, overrides: dict = None
     # Сообщения о ходе разбора интерфейсу. Модуль лежит в папке скриптов (она
     # копируется в каждую сессию), поэтому грузим по пути. Не нашёлся - работаем
     # молча: прогресс-бар не повод ронять извлечение.
-    try:
-        import importlib.util as _ilu
-        _gspec = _ilu.spec_from_file_location("_progress", scripts_dir / "progress.py")
-        _progress = _ilu.module_from_spec(_gspec)
-        _gspec.loader.exec_module(_progress)
-    except Exception:  # noqa: BLE001
-        _progress = None
+    _progress = script_loader.try_load(scripts_dir, "progress.py")
 
     to_extract = [d for d in docs if d["doc_type"] is not None]
     documents, skipped = [], []
@@ -492,7 +567,7 @@ def run_extraction(base_files_dir, scripts_dir, data_dir, overrides: dict = None
                 rel = None      # base_files вынесен за пределы data - подсветки не будет
             _progress.document(done, len(to_extract), doc["name"],
                                doc["doc_type"], path=rel)
-        documents.append(extract_document(doc, scripts_dir, data_dir, overwrite))
+        documents.append(extract_document(doc, scripts_dir, data_dir, reuse))
     if _progress:
         _progress.done()
 

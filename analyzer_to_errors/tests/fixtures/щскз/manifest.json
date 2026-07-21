@@ -1,0 +1,146 @@
+{
+  "generated_at": "2026-07-21T14:32:45",
+  "base_files_dir": "data/base_files",
+  "doc_types": {
+    "scheme": "Принципиальная схема EPLAN (векторный PDF): текст, линии, цепи проводов и клеммы, netlist по каналам ввода/вывода, межлистовые ссылки, геометрические кандидаты на ошибку.",
+    "netlist": "Таблица соединений (нетлист) по ГОСТ: построчный перечень физических точек подключения проводов.",
+    "assembly": "Сборочный чертёж шкафа (СБ): вид шкафа с размещением изделий. Извлекаются ПОДПИСИ элементов (позиционное обозначение + артикул), геометрия шкафа сознательно нет - её сотни тысяч примитивов и для поиска ошибок она бесполезна.",
+    "spec": "Спецификация оборудования (СО) по ГОСТ 21.110: построчный перечень заказываемых изделий - позиция, наименование, код оборудования, количество. Приходит книгой Excel (отдельный комплект на шкаф) либо листом PDF (в составе полного проекта)."
+  },
+  "bundles_explained": "СВЯЗКА - документы ОДНОГО проекта (шкафа). За один прогон анализатора загружаются документы одного проекта, поэтому по умолчанию ВСЕ документы - одна связка; несколько связок бывает, только если пользователь сам разложил файлы по подпапкам. Состав связки НЕ ФИКСИРОВАН: это может быть схема + сборочный чертёж + спецификация + нетлист, а может быть только чертёж со спецификацией. Отсутствие какого-то вида документа - НЕ ошибка, не сообщай о нём. Ключ сверки элементов внутри связки - позиционное обозначение ('1QF1', 'DO1', 'G1').",
+  "bundles": [
+    {
+      "bundle": "проект",
+      "documents": [
+        "026.822.13-ИПК  ЩСКЗ СБ_19.05.26",
+        "026.822.13-ИПК  ЩСКЗ СО_19.05.26",
+        "Итог1"
+      ],
+      "doc_types": {
+        "assembly": [
+          "026.822.13-ИПК  ЩСКЗ СБ_19.05.26"
+        ],
+        "spec": [
+          "026.822.13-ИПК  ЩСКЗ СО_19.05.26"
+        ],
+        "scheme": [
+          "Итог1"
+        ]
+      },
+      "cross_checkable_types": [
+        "scheme",
+        "assembly",
+        "spec"
+      ],
+      "cross_checkable": true
+    }
+  ],
+  "documents": [
+    {
+      "name": "026.822.13-ИПК  ЩСКЗ СБ_19.05.26",
+      "doc_type": "assembly",
+      "source_file": "data/base_files/026.822.13-ИПК  ЩСКЗ СБ_19.05.26.pdf",
+      "data_dir": "tests/fixtures/щскз/026.822.13-ИПК  ЩСКЗ СБ_19.05.26",
+      "parsers": [
+        "assembly_drawing_to_data.py"
+      ],
+      "doc_type_description": "Сборочный чертёж шкафа (СБ): вид шкафа с размещением изделий. Извлекаются ПОДПИСИ элементов (позиционное обозначение + артикул), геометрия шкафа сознательно нет - её сотни тысяч примитивов и для поиска ошибок она бесполезна.",
+      "status": "ok",
+      "files": [
+        "assembly.json"
+      ],
+      "stats": {
+        "total_pages": 6,
+        "assembly_elements": 366,
+        "assembly_unique_designators": 71,
+        "assembly_paired_from_block": 4,
+        "assembly_paired_nearest": 144,
+        "assembly_designation": "026.822.13-ИПК СБ"
+      },
+      "errors": [],
+      "warnings": [],
+      "reused": true,
+      "bundle": "проект",
+      "bundle_source": "все документы прогона - один проект"
+    },
+    {
+      "name": "026.822.13-ИПК  ЩСКЗ СО_19.05.26",
+      "doc_type": "spec",
+      "source_file": "data/base_files/026.822.13-ИПК  ЩСКЗ СО_19.05.26.xlsx",
+      "data_dir": "tests/fixtures/щскз/026.822.13-ИПК  ЩСКЗ СО_19.05.26",
+      "parsers": [
+        "specification_to_json.py"
+      ],
+      "doc_type_description": "Спецификация оборудования (СО) по ГОСТ 21.110: построчный перечень заказываемых изделий - позиция, наименование, код оборудования, количество. Приходит книгой Excel (отдельный комплект на шкаф) либо листом PDF (в составе полного проекта).",
+      "status": "ok",
+      "files": [
+        "specification.json"
+      ],
+      "stats": {
+        "spec_rows": 36,
+        "spec_unique_designators": 41,
+        "spec_cell_errors": 0,
+        "spec_designation": "026.822.13-ИПК ЩСКЗ СО_19.05.26"
+      },
+      "errors": [],
+      "warnings": [],
+      "reused": true,
+      "bundle": "проект",
+      "bundle_source": "все документы прогона - один проект"
+    },
+    {
+      "name": "Итог1",
+      "doc_type": "scheme",
+      "source_file": "data/base_files/Итог1.pdf",
+      "data_dir": "tests/fixtures/щскз/Итог1",
+      "parsers": [
+        "schematic_diagram_to_data.py",
+        "schematic_connectivity.py"
+      ],
+      "doc_type_description": "Принципиальная схема EPLAN (векторный PDF): текст, линии, цепи проводов и клеммы, netlist по каналам ввода/вывода, межлистовые ссылки, геометрические кандидаты на ошибку.",
+      "status": "ok",
+      "files": [
+        "nets.json",
+        "classified.json"
+      ],
+      "stats": {
+        "profile": "E: щиты с номерными рейками (24-051-АК, ЩСКЗ)",
+        "total_pages": 4,
+        "graph_nodes": 1894,
+        "graph_edges": 947,
+        "cross_page_links": 0,
+        "io_channels": 0,
+        "wire_crossings_with_dot": 0,
+        "wire_crossings_without_dot": 241,
+        "terminal_order_anomalies": 0,
+        "pages_skipped_as_graphics": 0,
+        "nets": 208,
+        "t_junctions_recovered": 248,
+        "glyph_hairlines_dropped": 24390,
+        "terminals_on_scheme": 49,
+        "wire_markings_on_scheme": 45,
+        "nets_with_2plus_terminals": 9,
+        "cross_refs_broken": 0,
+        "dangling_net_candidates": 6,
+        "duplicate_terminal_addresses": 2,
+        "relay_coils": 9,
+        "duplicate_relay_coils": 1
+      },
+      "errors": [],
+      "warnings": [],
+      "reused": true,
+      "bundle": "проект",
+      "bundle_source": "все документы прогона - один проект"
+    }
+  ],
+  "skipped_files": [],
+  "summary": {
+    "total_documents": 3,
+    "extracted_ok": 3,
+    "failed": 0,
+    "skipped": 0,
+    "bundles": 1,
+    "cross_checkable_bundles": 1
+  },
+  "_fixture": "Собрано tests/build_fixtures.py из извлечённых данных реального корпуса. Исходных PDF здесь нет и быть не может - это документация заказчика. classified.json урезан до полей text/entity_type."
+}

@@ -17,13 +17,28 @@
 очереди, хотя к серверу ИИ не обращается вовсе.
 
 Теперь очередей две:
-  * СКРИПТОВЫЙ ПУЛ (SCRIPT_WORKERS) - сессия начинает считаться сразу, если есть
-    свободный воркер. Пул не бесконечный: у машины конечное число ядер, и
+  * СКРИПТОВЫЙ СЛОТ (SCRIPT_WORKERS штук) - сессия начинает считаться сразу,
+    если слот свободен. Слотов конечное число: у машины конечное число ядер, и
     десять одновременных разборов альбома по 300 листов просто загрузят диск.
   * СЛОТ ИИ (ровно один) - его сессия занимает ТОЛЬКО на стадию агентов.
     Дойдя до неё, подпроцесс печатает маркер и замирает на своём stdin;
     воркер ставит сессию в llm-очередь, а когда слот освободится, отвечает
     строкой в stdin - и агенты стартуют. См. _pipeline_runner.wait_for_llm_slot.
+
+СЛОТЫ, А НЕ ФИКСИРОВАННЫЙ ПУЛ ПОТОКОВ - И ЭТО ГЛАВНАЯ ПРАВКА V1.7. Раньше
+воркеров было ровно SCRIPT_WORKERS, и поток воркера оставался занят сессией до
+самого конца прогона - в том числе всё время, пока она СТОЯЛА В ОЧЕРЕДИ К ИИ.
+Достаточно было четырёх сессий в полном режиме, дошедших до гейта, чтобы пятая
+не начала считать скрипты вовсе: все потоки заняты ожиданием единственного
+слота ИИ. То есть модуль ровно тем и грешил, что объявлял исправленным.
+
+Теперь скриптовый слот ОТПУСКАЕТСЯ ПЕРЕД ОЖИДАНИЕМ ИИ (_pass_llm_gate), и на
+его место немедленно входит следующая сессия. Поток у сессии свой на всё время
+прогона - он обязан продолжать читать stdout подпроцесса, - но потоков этих
+столько, сколько живых прогонов, а не сколько разрешено считать одновременно.
+Число сессий, одновременно ждущих у гейта, равно длине очереди к ИИ: каждая
+держит живой подпроцесс, потому что после своей очереди он пойдёт дальше. Это
+свойство самого гейта, а не пула.
 
 Прогон исполняется отдельным процессом, а не в этом потоке - только так отмена
 может оборвать его мгновенно, убив всё дерево процессов, а не дожидаясь, пока
@@ -46,10 +61,13 @@ from sessions import SessionError
 HERE = Path(__file__).resolve().parent
 RUNNER_SCRIPT = HERE / "_pipeline_runner.py"
 
-# Сколько сессий считают скрипты одновременно. Скриптовая стадия упирается в
+# Сколько сессий считают СКРИПТЫ одновременно. Скриптовая стадия упирается в
 # процессор и диск, а не в сеть: смысл поднимать это значение есть ровно до
 # числа ядер. Четыре - осторожная величина для рабочей станции бюро; на сервере
 # её можно поднять, ничего в коде не меняя (изоляция сессий - по путям).
+#
+# Это ЧИСЛО СЛОТОВ, а не число потоков: слот сессия занимает только на время
+# скриптов и отпускает его, уходя ждать очереди к ИИ.
 SCRIPT_WORKERS = 4
 
 # Слот к серверу ИИ ровно один и поднимать его нельзя: LM Studio на всех один.
@@ -85,7 +103,7 @@ def kill_process_tree(proc):
 
 
 class AnalysisQueue:
-    """Пул скриптовых воркеров + один слот к серверу ИИ.
+    """Скриптовые слоты + один слот к серверу ИИ.
 
     Единственный источник правды о статусе - session.json на диске (см.
     sessions.py). В памяти лежат только очереди и хэндлы текущих процессов:
@@ -98,26 +116,84 @@ class AnalysisQueue:
         self.base_config_path = str(base_config_path)
         self._cv = threading.Condition()
 
-        self._pending = deque()        # ждут свободного скриптового воркера
+        self._pending = deque()        # ждут свободного скриптового слота
         self._running = {}             # id сессии -> Popen
+        self._script_busy = 0          # сколько скриптовых слотов занято
+        self._script_held = set()      # id сессий, держащих скриптовый слот
         self._llm_queue = deque()      # id сессий, ждущих слота к ИИ
         self._llm_busy = 0             # сколько слотов ИИ занято
         self._cancelled = set()        # id, для которых пришла отмена
-        self._threads = []
         self._progress_written = {}    # id -> когда прогресс последний раз лёг на диск
         self._progress_pending = {}    # id -> придержанное сообщение о листе
 
     # ---------- запуск ----------
 
     def start(self):
-        """Поднимает воркеров и возвращает очередь в то состояние, в котором её
+        """Поднимает диспетчер и возвращает очередь в то состояние, в котором её
         застал перезапуск сервера."""
         for meta in self.store.restore_after_restart():
             self._pending.append(meta["id"])
-        for _ in range(SCRIPT_WORKERS):
-            t = threading.Thread(target=self._worker, daemon=True)
-            t.start()
-            self._threads.append(t)
+        threading.Thread(target=self._dispatch, daemon=True).start()
+
+    # ---------- скриптовые слоты ----------
+
+    def _release_script(self, session_id) -> None:
+        """Отпустить скриптовый слот. Идемпотентно: зовётся и на гейте к ИИ, и
+        в finally прогона, и порядок между ними не гарантирован."""
+        with self._cv:
+            if session_id in self._script_held:
+                self._script_held.discard(session_id)
+                self._script_busy -= 1
+                self._cv.notify_all()
+
+    def _dispatch(self):
+        """Единственный поток-раздатчик: пускает сессию, как только освободился
+        скриптовый слот, и заводит ей собственный поток на весь прогон.
+
+        Поток нужен именно на весь прогон: он читает stdout подпроцесса
+        построчно (лог, прогресс, маркер гейта), и бросить это чтение нельзя.
+        А вот СЛОТ прогон отдаёт раньше - уходя ждать очереди к ИИ.
+        """
+        while True:
+            with self._cv:
+                while not self._pending or self._script_busy >= SCRIPT_WORKERS:
+                    self._cv.wait()
+                session_id = self._pending.popleft()
+                if session_id in self._cancelled:
+                    continue          # отменили, пока ждала очереди
+                self._script_busy += 1
+                self._script_held.add(session_id)
+                self._running[session_id] = None
+            threading.Thread(target=self._session_thread,
+                             args=(session_id,), daemon=True).start()
+
+    def _session_thread(self, session_id):
+        """Один прогон целиком. Обязан пережить любую сессию: упавшая сессия не
+        должна ни утащить с собой слот, ни оставить очередь без раздатчика."""
+        try:
+            self._run_session(session_id)
+        except Exception as e:  # noqa: BLE001
+            try:
+                self.store.append_log(session_id, f"!!! Сбой прогона: {e}")
+                self.store.update(session_id, status="error", error=str(e),
+                                  finished_at=time.time(), stage=None, progress=None)
+            except SessionError:
+                pass                  # папку сессии могли удалить руками
+        finally:
+            self._release_script(session_id)
+            try:
+                # Нарезка альбома создаёт документы уже ВНУТРИ прогона, а
+                # очистка перед ним стирает прошлые - число файлов сессии за
+                # прогон меняется, и в списке сессий оно должно сойтись.
+                self.store.refresh_file_count(session_id)
+            except SessionError:
+                pass
+            with self._cv:
+                self._running.pop(session_id, None)
+                if session_id in self._llm_queue:
+                    self._llm_queue.remove(session_id)
+                self._cancelled.discard(session_id)
+                self._cv.notify_all()
 
     # ---------- публичное API ----------
 
@@ -137,9 +213,12 @@ class AnalysisQueue:
         with self._cv:
             self._cancelled.discard(session_id)
             self._pending.append(session_id)
-            free = max(SCRIPT_WORKERS - len(self._running), 0)
+            # Свободные слоты считаем по _script_busy, а не по числу живых
+            # прогонов: сессия, ушедшая ждать очереди к ИИ, слот уже отдала и
+            # никому не мешает, хотя её процесс жив и в _running она есть.
+            free = max(SCRIPT_WORKERS - self._script_busy, 0)
             position = max(len(self._pending) - free, 0)
-            self._cv.notify()
+            self._cv.notify_all()
         self.store.append_log(session_id, "=== Сессия принята к исполнению ===")
         return position
 
@@ -176,10 +255,17 @@ class AnalysisQueue:
         kill_process_tree(proc)
 
     def snapshot(self) -> dict:
-        """Что сейчас считается и кто чего ждёт - для списка сессий."""
+        """Что сейчас считается и кто чего ждёт - для списка сессий.
+
+        running - все живые прогоны, script_busy - сколько из них реально
+        занимают процессор. Числа расходятся ровно на сессии, стоящие в
+        очереди к ИИ: их процесс жив, но считать он ничего не считает.
+        """
         with self._cv:
             return {
                 "running": sorted(self._running),
+                "script_busy": self._script_busy,
+                "script_slots": SCRIPT_WORKERS,
                 "queued": list(self._pending),
                 "llm_queue": list(self._llm_queue),
                 "llm_busy": self._llm_busy,
@@ -194,34 +280,6 @@ class AnalysisQueue:
         """{id сессии: её номер в очереди К СЕРВЕРУ ИИ, начиная с 1}."""
         with self._cv:
             return OrderedDict((sid, i + 1) for i, sid in enumerate(self._llm_queue))
-
-    # ---------- воркер ----------
-
-    def _worker(self):
-        while True:
-            with self._cv:
-                while not self._pending:
-                    self._cv.wait()
-                session_id = self._pending.popleft()
-                if session_id in self._cancelled:
-                    continue          # отменили, пока ждала очереди
-                self._running[session_id] = None
-            try:
-                self._run_session(session_id)
-            except Exception as e:  # noqa: BLE001 - воркер обязан пережить любую сессию
-                try:
-                    self.store.append_log(session_id, f"!!! Сбой прогона: {e}")
-                    self.store.update(session_id, status="error", error=str(e),
-                                      finished_at=time.time(), stage=None, progress=None)
-                except SessionError:
-                    pass              # папку сессии могли удалить руками
-            finally:
-                with self._cv:
-                    self._running.pop(session_id, None)
-                    if session_id in self._llm_queue:
-                        self._llm_queue.remove(session_id)
-                    self._cancelled.discard(session_id)
-                    self._cv.notify_all()
 
     def _is_cancelled(self, session_id) -> bool:
         with self._cv:
@@ -259,7 +317,7 @@ class AnalysisQueue:
         self.store.update(session_id, status="running", started_at=time.time(),
                           stage="скрипты")
 
-        paths = self.store.prepare_run(session_id)
+        paths, doc_types = self.store.prepare_run(session_id)
         log = lambda line: self.store.append_log(session_id, line)  # noqa: E731
         log(f"=== Запуск анализа: режим '{mode}' ===")
 
@@ -274,7 +332,9 @@ class AnalysisQueue:
                 "input_dir": str(paths["data_dir"]),
                 "output_dir": str(paths["output_dir"]),
             },
-            "doc_types": meta.get("doc_types") or None,
+            # уже приведены к ключам, которых ждёт ingest (относительно
+            # base_files) - см. SessionStore.prepare_run
+            "doc_types": doc_types or None,
             "skip_agents": (mode == "scripts"),
             "clear_previous": True,
         }
@@ -375,10 +435,17 @@ class AnalysisQueue:
     def _pass_llm_gate(self, session_id, proc, log) -> bool:
         """Подпроцесс досчитал скрипты и просится к серверу ИИ.
 
-        Возвращает True, если слот занят нами и его надо будет отпустить.
+        Возвращает True, если слот ИИ занят нами и его надо будет отпустить.
         """
         self.store.update(session_id, stage="очередь к ИИ", progress=None)
         log("=== Скрипты отработали. Ожидание очереди к серверу ИИ ===")
+
+        # Скриптовый слот отдаём ЗДЕСЬ, до ожидания. Дальше эта сессия
+        # процессор не занимает - она стоит в очереди к LM Studio, - и держать
+        # из-за неё чужие прогоны незачем. Именно этим раньше и вырождался
+        # весь замысел: четыре сессии, дошедшие до гейта, занимали все четыре
+        # воркера, и пятая не начинала считать скрипты вовсе.
+        self._release_script(session_id)
 
         if not self._acquire_llm(session_id):
             return False        # отменили, пока стояли в очереди

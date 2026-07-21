@@ -39,6 +39,9 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import findings as _findings  # noqa: E402  (общая форма находки и ref'а)
+
 
 DOC_TYPE = "assembly"
 SOURCE_FILE = "assembly.json"
@@ -53,38 +56,13 @@ PEER_SHEET_MAX_MISSING = 3
 
 
 def _ref(document, sheet=None, designator=None, found=None):
-    return {
-        "document": document,
-        "doc_type": DOC_TYPE,
-        "source_file": SOURCE_FILE,
-        "sheet": sheet,
-        "row": None,
-        "cabinet": None,
-        "terminal_block": None,
-        "pin": None,
-        "terminal_type": None,
-        "marking": None,
-        "kks": None,
-        "conductor": None,
-        "designator": designator,
-        "article": None,
-        "name": None,
-        "quantity": None,
-        "found": found,
-    }
+    return _findings.ref(document, DOC_TYPE, SOURCE_FILE,
+                        sheet=sheet, designator=designator, found=found)
 
 
 def _finding(kind, severity, type_ru, refs, finding, action, evidence=None):
-    return {
-        "kind": kind,
-        "scope": "single_document",
-        "severity": severity,
-        "type": type_ru,
-        "refs": refs,
-        "finding": finding,
-        "action": action,
-        "evidence": evidence,
-    }
+    return _findings.finding(kind, severity, type_ru, refs, finding, action,
+                            evidence, scope="single_document")
 
 
 def rule_element_missing_from_peer_sheet(document, asm):
@@ -167,7 +145,7 @@ ALL_RULES = [
     rule_element_missing_from_peer_sheet,
 ]
 
-SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+SEVERITY_ORDER = _findings.SEVERITY_ORDER
 
 
 def check_assembly(document, asm):

@@ -15,7 +15,8 @@ origin main`) unless the user says otherwise for a specific commit.
 чертежах (СБ), спецификациях (СО, xlsx) и таблицах подключений (нетлистах). Извлекает
 данные из PDF/XLSX, прогоняет детерминированные чекеры (по документу и по связке),
 затем два независимых LLM-агента (через Open Interpreter, локальные модели в LM Studio),
-сшивает результаты в единый отчёт. Полностью офлайн — без облачных API.
+сшивает результаты в единый отчёт. Без облачных API: модели крутятся в LM Studio, адрес
+которого задаётся в `config.local.yaml` (по умолчанию — эта же машина).
 
 **Ключевое понятие — СВЯЗКА** (`bundles.py`): документы ОДНОГО проекта (шкафа).
 Самые дорогие ошибки лежат между документами (изделие нарисовано, но не заказано;
@@ -55,6 +56,10 @@ Two top-level pieces:
 ```bash
 # Install pipeline deps (web_app has none — stdlib only)
 pip install -r analyzer_to_errors/requirements.txt
+pip install -r analyzer_to_errors/requirements-dev.txt   # только для тестов
+
+# Tests (from the repo root; ~9 s, no PDFs and no LLM needed)
+pytest
 
 # Web UI
 python web_app/server.py            # → http://localhost:8000
@@ -84,12 +89,39 @@ long as it likes. That is the whole mechanism behind the web UI's queue: scripts
 immediately and in parallel, only the agent stage is serialized. Nothing else in the
 pipeline knows the queue exists.
 
-There is no test suite, linter, or build step in this repo — verification is running
-`--extract-only` / `--rules-only` against the real bundle in
-`analyzer_to_errors/data/base_files/`, or `--check-llm` against the configured LM Studio
-servers. `--rules-only` on already-extracted data is instant and is the fast loop when
-working on checkers. A sudden jump in the finding count means a checker regressed into
-false positives.
+### Tests (`analyzer_to_errors/tests/`, `pytest` from the repo root)
+
+Всё в этом проекте держится на ЗАМЕРАХ по реальным файлам («было 489 находок, из них
+~480 ложных; стало 4»), и до V1.7 эти числа охранял только человек, помнящий их
+наизусть. Теперь их охраняют **золотые базлайны**:
+
+* `test_baseline.py` — находки чекеров на корпусе ЩСКЗ, **6 штук**, сверяются с
+  `fixtures/щскз/expected_findings.json` не по тексту (он переписывается при любой
+  правке формулировок), а по СУТИ: вид, важность, тип и опознавательные поля каждого
+  `ref`. Плюс отдельная проверка, что находки чекеров проходят ту же схему, что и
+  ответы моделей, — иначе лишнее поле доезжает до интерфейса пустой колонкой;
+* `test_album_split.py` — нарезка двух настоящих альбомов: **9 частей / 1 шкаф** на
+  Енисее и **48 частей / 14 связок** на ЭОМ.
+
+**Исходных PDF в репозитории нет и быть не может** — это документация заказчика.
+Фикстуры — ИЗВЛЕЧЁННЫЕ данные (`tests/build_fixtures.py`, 11 МБ → 332 КБ: `raw.json`
+чекерам не нужен вовсе, а `classified.json` урезан до полей, которые читает
+`load_scheme`) и НАИМЕНОВАНИЯ ЛИСТОВ штампов (8 КБ) — всё, из чего нарезка выводит
+границы документа, тип части и шкаф.
+
+**Упавший базлайн — не повод обновить эталон.** Больше находок — почти наверняка
+правило начало давать ложные; меньше — перестало видеть настоящую ошибку. Эталон
+переписывают ОТДЕЛЬНОЙ командой (`python tests/record_baseline.py`), а не ключом к
+pytest: кнопка «обновить эталон» в одно нажатие превращает золотой тест в
+самоисполняющееся пророчество.
+
+Остальное — юнит-тесты на функции, ошибка в которых НЕ ВИДНА в отчёте: определение
+типа документа по имени, обозначение шкафа, омоглифы, раскрытие диапазонов позиций,
+подпись находки, очередь прогонов (с настоящими подпроцессами и фальшивым раннером),
+потоковый разбор multipart, хранилище сессий. Линтера и сборки по-прежнему нет.
+
+Ручная проверка никуда не делась и остаётся быстрым циклом: `--rules-only` на уже
+извлечённых данных мгновенен, `--check-llm` бьёт по настоящим серверам LM Studio.
 
 Extraction used to take minutes; it no longer does (ЩСКЗ bundle **7 s**, a 309-sheet
 album **143 s**) — see the perf note under `schematic_diagram_to_data.py` below. Both
@@ -138,6 +170,34 @@ still the false-positive corpus for schematic rules (profiles C and D): recover 
 `git show`, extract, and confirm any new scheme rule stays at **0 findings** on both.
 
 ## Architecture
+
+### Раскладка пайплайна по файлам
+
+`main.py` — ФАСАД: порядок стадий, агенты, слияние, CLI. Всё, что снаружи зовут как
+`pipeline.load_config` / `pipeline.run_rules_stage`, переэкспортируется отсюда, но
+живёт по соседству:
+
+| файл | что в нём |
+|---|---|
+| `settings.py` | пути, `config.yaml` + `config.local.yaml`, `resolve_path` |
+| `stages.py` | извлечение, правила по документам, сверка связок |
+| `text_report.py` | текстовый отчёт для консоли (у сайта свой, у PDF свой) |
+| `known_filter.py` | гашение заранее известных ошибок |
+| `script_loader.py` | загрузка модуля из `base_analysis_scripts` по пути |
+| `normalize.py` | омоглифы и ведущие нули — ОДНА таблица на весь проект |
+| `prompts/*.md` | промпты агента (три сотни строк предметного текста) |
+| `data/base_analysis_scripts/findings.py` | общая форма находки и `ref` для всех пяти чекеров |
+
+Два места стоит знать отдельно, потому что их дублирование однажды уже стреляло:
+
+* **`normalize.py`** держит таблицу омоглифов для ОБОИХ направлений. `bundle_rules`
+  сворачивает в латиницу (нужен ключ сравнения, направление безразлично),
+  `full_project.detect_cabinet` — в кириллицу (обозначение шкафа становится именем
+  папки и названием связки, которое читает человек). Разойдись эти списки на одну
+  букву — документы одного щита разъедутся по двум связкам молча.
+* **`bundles.GENERATED_MARKER`** (`.from_full_project`) — единственное место, куда
+  дотягиваются оба пользователя метки: `full_project.py` тянет `fitz`, а
+  `web_app/sessions.py` по замыслу работает на голой стандартной библиотеке.
 
 ### Pipeline stages (`analyzer_to_errors/main.py::run_pipeline`)
 
@@ -282,10 +342,23 @@ still the false-positive corpus for schematic rules (profiles C and D): recover 
    netlist-vs-scheme cross-checking and wording. Their scratch files go in
    `data/your_helping_scripts_and_files/`.
 4. **Merge** (`merge_reports.py`) — a "merger" model (reuses `agent_1` or `agent_2`,
-   configured via `llm_servers.merger.use_agent`) combines the two agent reports, dedupes,
-   and strips anything in `known_errors.json`. The rule- and bundle-stage findings are then
-   added back in **deterministically** (no LLM) via `combine_rule_and_agent_findings` —
-   they're ground truth and must not be lost in an LLM merge.
+   configured via `llm_servers.merger.use_agent`) combines the two agent reports and
+   dedupes. The rule- and bundle-stage findings are then added back in
+   **deterministically** (no LLM) via `combine_rule_and_agent_findings` — they're ground
+   truth and must not be lost in an LLM merge.
+
+   **`known_errors.json` применяется ДЕТЕРМИНИРОВАННО** (`known_filter.py`), а не только
+   промптом мерджера. Пока фильтр жил в одном промпте, он работал ровно для находок
+   агентов и не работал больше ни для чего: находки чекеров приходят мимо мерджера, а в
+   режиме «без ИИ» (как и при `agents.count: 1`) мерджера нет вовсе. То есть в основном
+   сегодняшнем сценарии — когда почти все находки дают чекеры — файл не делал ничего, и
+   погасить разобранное вручную ложное срабатывание было нечем. Запись — находка в
+   формате `schema.py`, заполненная **частично**: совпасть должны `kind`/`type`/`scope`
+   (те, что указаны) и каждый её `ref` — с каким-нибудь `ref` находки по заполненным
+   полям. Требовать переписать все пятнадцать полей значило бы гарантировать опечатку, с
+   которой фильтр молча не срабатывает; запись, не совпавшая ни с чем, пишет
+   предупреждение в лог. Тот же список по-прежнему уходит и в промпт мерджера — он гасит
+   перефразированные находки агентов.
 5. **Validation** (`validation.py`, `schema.py`) — every model JSON response is validated
    against the schema, with an auto-repair retry loop (`agent.max_json_repair_attempts`
    in `config.yaml`). Exhausting retries raises `validation.JSONValidationError`.
@@ -428,7 +501,7 @@ A `ref` locates one spot in domain terms. Same fields for every doc type, in two
 `kks`, `conductor`) and "element" (`designator` — the bundle matching key, `article`,
 `name`, `quantity`), plus `document`, `doc_type`, `source_file`, `found`; absent fields
 are `null`. The UI renders one table per family (their columns don't combine) — routing is
-by the doc types present in `refs`, see `renderReport` in `app.js`.
+by the doc types present in `refs`, see `renderReport` in `static/js/report.js`.
 
 Findings are deduped/matched across stages by `_finding_signature` in `main.py`: `(kind,
 {(document, terminal_block, pin, kks, designator, article) for each ref})`. The element
@@ -492,9 +565,21 @@ deliberately absent, and `REVIEW` findings are questions, not assertions.
 ради находок чекера, которые считаются за секунды. Тем более что режим «без ИИ» ждал в
 той же очереди, хотя к серверу ИИ не обращается вовсе. Теперь:
 
-* **скриптовый пул** (`SCRIPT_WORKERS = 4`) — сессия начинает считаться сразу; пул
-  конечен, потому что десять одновременных разборов альбома упрут в диск;
+* **скриптовые СЛОТЫ** (`SCRIPT_WORKERS = 4`) — сессия начинает считаться сразу; слотов
+  конечное число, потому что десять одновременных разборов альбома упрут в диск;
 * **слот к ИИ ровно один** (`LLM_SLOTS`) и поднимать его нельзя — LM Studio на всех один.
+
+**Скриптовый слот ОТПУСКАЕТСЯ ПЕРЕД ОЖИДАНИЕМ ИИ** — это V1.7, и без этого весь замысел
+вырождался. Прежде воркеров было ровно `SCRIPT_WORKERS`, и поток воркера оставался занят
+сессией до конца прогона, в том числе всё время, пока она СТОЯЛА В ОЧЕРЕДИ К ИИ:
+четырёх сессий в полном режиме, дошедших до гейта, хватало, чтобы пятая не начала
+считать скрипты вовсе. Отказ тихий — сессия просто висела «в очереди». Теперь поток у
+сессии свой на весь прогон (он обязан продолжать читать stdout подпроцесса), а слот
+отдаётся в `_pass_llm_gate`, и на освободившееся место сразу входит следующая. Число
+сессий, одновременно ждущих у гейта, равно длине очереди к ИИ: каждая держит живой
+подпроцесс, потому что после своей очереди он пойдёт дальше — это свойство гейта, а не
+пула. В `snapshot()` поэтому два числа: `running` (живые прогоны) и `script_busy`
+(реально занимающие процессор), и в интерфейсе «считается сессий» — второе.
 
 Механика гейта: дойдя до стадии агентов, подпроцесс печатает в stdout `@@LLM_WAIT` и
 **замирает на чтении своего stdin**; воркер (который и так читает этот stdout построчно)
@@ -555,8 +640,40 @@ cancel,log,report,report.pdf,file,fragment}`. Лог отдаётся порци
 `base_files` и `full_projects` — рядом в `data/` лежат извлечённые данные и копия
 скриптов.
 
+**Путём же ключуются и ПОМЕТКИ ТИПА** — до V1.7 они одни оставались на голом имени, и на
+альбоме это ломалось молча: пометка одного «Общего вида» ложилась на все одноимённые, а
+пометка «полный проект» для файла в подпапке не находила его вовсе (`prepare_run` искал
+строго `base_files/<имя>`). Старые ключи мигрируют при первом чтении (`_doc_types`): имя,
+которому нашёлся ровно один файл, переезжает на его путь, неоднозначное отбрасывается —
+гадать нельзя, а оставить значит навсегда сохранить неработающую пометку. `set_type`
+теперь ещё и проверяет, что файл существует (раньше в `session.json` оседал любой
+присланный ключ). В `.doc_types.json` сессии `prepare_run` кладёт ключи **относительно
+`base_files`** — про папку `data/` `ingest` не знает; он принимает и путь, и голое имя.
+
+**Загрузка идёт ПОТОКОМ прямо в файл** (`web_app/multipart.py`, свой разбор
+multipart/form-data). Модуль `cgi` объявлен устаревшим в Python 3.11 и **удалён в 3.13** —
+сервер перестал бы запускаться на первом же обновлении Python; вдобавок `FieldStorage`
+держал загрузку в памяти целиком, а здесь грузят альбомы на сотни мегабайт (и копия ещё
+раз оседала на `item.file.read()`). Самое хрупкое место такого разбора — разделитель,
+пришедший на стыке двух кусков чтения: в буфере всегда придерживается хвост длиной с
+разделитель, и это отдельно проверяется тестами на границах 64 КБ. Отдача файлов тоже
+потоковая (`_send_file` через `copyfileobj`): открытие альбома в соседней вкладке — то,
+что инженер делает на каждое замечание.
+
+**`n_files` хранится в `session.json`**, а не считается обходом диска на каждый опрос:
+список сессий опрашивается раз в 2 с, наблюдатель завершения — раз в 3 с, и оба обходили
+рекурсивно `base_files` ВСЕХ сессий (у сессии с нарезанным альбомом там полсотни файлов).
+Пересчитывается там, где набор файлов меняется, и сходится при открытии сессии.
+
 `report.pdf` (`analyzer_to_errors/report_pdf.py`) и `fragment` (`fragment.py`) тянут
 `fitz`, поэтому импортируются **внутри своих обработчиков**, а не наверху модуля.
+
+**Фронтенд разложен по ES-модулям** (`static/js/`, грузятся браузером как есть —
+сборщика в проекте нет и не нужно): `util.js` (DOM, форматы, запрос к API, консоль,
+тосты), `state.js` (состояние вкладки и подпись статуса, которую рисуют оба экрана),
+`list.js`, `session.js`, `report.js` и `app.js` — роутинг, инициализация, наблюдатель
+завершения, привязка событий. Объект `S` мутируется на месте, а не переприсваивается:
+иначе модули, импортировавшие его один раз, держали бы ссылку на прежний.
 
 Анализ по-прежнему исполняется **отдельным подпроцессом** (`_pipeline_runner.py` с JSON
 args-файлом), а не потоком — только так отмена убивает всё дерево процессов мгновенно и
@@ -571,7 +688,7 @@ args-файлом), а не потоком — только так отмена 
 возвращаются в очередь в порядке `queued_at`.
 
 **Уведомление о завершении — ЛЮБОЙ сессии, не только открытой** (`startFinishWatcher`
-в `app.js`, V1.6). Открытая сессия и список поллятся своими таймерами, но оба живут
+в `static/js/app.js`, V1.6). Открытая сессия и список поллятся своими таймерами, но оба живут
 только на своём экране; наблюдатель же работает всегда: раз в 3 с сравнивает статусы
 всех сессий с прошлым тиком и на переходе «queued/running → финал» показывает тост в
 углу (клик открывает сессию) и системное Notification — последнее ТОЛЬКО когда вкладка
@@ -610,7 +727,23 @@ model names, `max_tokens` is response-length only — must stay well under
 `context_window` or Open Interpreter truncates the prompt history), `agent`
 (`max_json_repair_attempts`, `max_code_turns`, `timeout_seconds` — safeguards against an
 agent looping forever since Open Interpreter only stops when the model itself decides
-it's done), `extraction.reuse_existing` (skip re-parsing a PDF if its data folder already
-exists), `paths` (в т.ч. `full_projects_dir` — альбомы целиком; папка сохраняется от
-очистки в `clear_previous_results`, это вход пользователя, а не результат прогона),
-`logging.save_raw_agent_json`.
+it's done), `extraction.reuse_existing`, `paths` (в т.ч. `full_projects_dir` — альбомы
+целиком; папка сохраняется от очистки в `clear_previous_results`, это вход пользователя,
+а не результат прогона), `logging.save_raw_agent_json`.
+
+**Адрес сервера ИИ задаётся в `config.local.yaml`** (gitignored, образец —
+`config.local.example.yaml`), а не в `config.yaml`: это свойство конкретной установки, а
+не проекта. Слияние идёт **по веткам** (`settings._deep_merge`) — переопределяют один
+`base_url`, а модели и лимиты продолжают браться из общего конфига. Пока адрес жил в
+`config.yaml`, он неизбежно оказывался чьим-то личным и уезжал в репозиторий: там стоял
+публичный IP при том, что README и этот файл обещают «полностью офлайн».
+
+**`extraction.reuse_existing` теперь ДЕЙСТВИТЕЛЬНО пропускает разбор.** Прежде флаг не
+пропускал ничего — извлечение шло всегда, а он лишь запрещал стирать папку документа
+перед ним; при включённом (по умолчанию!) флаге файлы прошлого прогона оставались лежать
+рядом с новыми, и если новый разбор падал или давал меньше файлов, чекеры и агент читали
+позавчерашние данные как сегодняшние. Теперь рядом с данными лежит
+`.extraction.json` (отпечаток исходника: размер и mtime, набор парсеров, список файлов,
+статус), и разбор пропускается, только если всё сходится и тогда он не падал. Папка
+перед НАСТОЯЩИМ разбором чистится всегда. Замер на ЩСКЗ: полное извлечение ~20 с,
+повторный прогон мгновенный.

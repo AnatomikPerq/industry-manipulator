@@ -66,6 +66,9 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import findings as _findings  # noqa: E402  (общая форма находки и ref'а)
+
 from schema import REPORT_SCHEMA  # noqa: E402
 
 DOC_TYPE = "scheme"
@@ -78,35 +81,16 @@ SOURCE_FILE = "nets.json"
 
 def _ref(document, sheet=None, found=None, terminal_block=None, pin=None,
          marking=None, kks=None, conductor=None, designator=None):
-    return {
-        "document": document,
-        "doc_type": DOC_TYPE,
-        "source_file": SOURCE_FILE,
-        "sheet": sheet,
-        "row": None,                 # у схемы нет строк таблицы
-        "cabinet": None,
-        "terminal_block": terminal_block,
-        "pin": pin,
-        "terminal_type": None,
-        "marking": marking,
-        "kks": kks,
-        "conductor": conductor,
-        "designator": designator,
-        "found": found,
-    }
+    # row у схемы нет по построению: строк таблицы в ней не существует
+    return _findings.ref(
+        document, DOC_TYPE, SOURCE_FILE,
+        sheet=sheet, terminal_block=terminal_block, pin=pin, marking=marking,
+        kks=kks, conductor=conductor, designator=designator, found=found)
 
 
 def _finding(kind, severity, type_ru, refs, finding, action, evidence=None):
-    return {
-        "kind": kind,
-        "scope": "single_document",
-        "severity": severity,
-        "type": type_ru,
-        "refs": refs,
-        "finding": finding,
-        "action": action,
-        "evidence": evidence,
-    }
+    return _findings.finding(kind, severity, type_ru, refs, finding, action,
+                            evidence, scope="single_document")
 
 
 # ============================================================
@@ -306,7 +290,7 @@ ALL_RULES = [
     rule_duplicate_relay_coil,
 ]
 
-SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+SEVERITY_ORDER = _findings.SEVERITY_ORDER
 
 
 def check_schematic(document, nets_doc):

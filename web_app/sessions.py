@@ -40,6 +40,10 @@ import time
 import uuid
 from pathlib import Path
 
+# analyzer_to_errors уже в sys.path у сервера. bundles - стдлиб-модуль
+# (никакого fitz), и в нём живёт имя метки нарезанной подпапки.
+import bundles
+
 HERE = Path(__file__).resolve().parent
 ANALYZER_DIR = HERE.parent / "analyzer_to_errors"
 SESSIONS_DIR = ANALYZER_DIR / "sessions"
@@ -259,17 +263,17 @@ class SessionStore:
         base_files/, и такие подпапки - явные связки (bundles.py).
 
         Поле "path" - путь относительно папки data сессии. Именно он, а не имя,
-        адресует файл в эндпоинтах просмотра и удаления: имена в разных
-        подпапках-связках повторяются (у каждого шкафа альбома свой «Общий
-        вид»), и по голому имени сервер открыл бы не тот файл.
+        адресует файл в эндпоинтах просмотра и удаления И служит ключом пометки
+        типа: имена в разных подпапках-связках повторяются (у каждого шкафа
+        альбома свой «Общий вид»), и по голому имени сервер открыл бы не тот
+        файл, а пометка одного документа красила бы все одноимённые разом.
         """
         import ingest  # импорт здесь: analyzer_to_errors уже в sys.path у сервера
 
-        meta = self._read_meta(session_id)
         paths = self.paths_of(session_id)
         data_dir = paths["data_dir"]
         base = paths["base_files_dir"]
-        overrides = meta.get("doc_types") or {}
+        overrides = self._doc_types(session_id)
         files = []
         if base.is_dir():
             for p in sorted(base.rglob("*")):
@@ -278,11 +282,13 @@ class SessionStore:
                 if p.name.startswith("~$") or p.name.startswith("."):
                     continue          # временный файл открытой книги Excel
                 rel = p.relative_to(base)
+                rel_data = p.relative_to(data_dir).as_posix()
                 files.append({
                     "name": p.name,
-                    "path": p.relative_to(data_dir).as_posix(),
+                    "path": rel_data,
                     "size": p.stat().st_size,
-                    "detected_type": overrides.get(p.name) or ingest.detect_doc_type(p.name),
+                    "detected_type": (overrides.get(rel_data)
+                                      or ingest.detect_doc_type(p.name)),
                     # связка. Обычно None: все документы прогона - один проект;
                     # имя появляется, только если файлы разложены по подпапкам
                     "bundle": rel.parts[0] if len(rel.parts) > 1 else None,
@@ -312,16 +318,110 @@ class SessionStore:
                     "bundle": None,
                     "generated": False,
                 })
+
+        # Раз уж обошли диск - заодно поправим счётчик для списка сессий.
+        # Это и есть гарантия схождения: как бы ни разошлось хранимое число
+        # (папку правили руками, прогон оборвали посреди нарезки), открытие
+        # сессии его чинит.
+        if len(files) != self._read_meta(session_id).get("n_files"):
+            self.refresh_file_count(session_id)
         return files
+
+    # ---------- пометки типа документа ----------
+
+    def file_count(self, session_id, meta=None) -> int:
+        """Сколько файлов в сессии - для списка сессий.
+
+        Число ХРАНИТСЯ в session.json, а не считается на каждый запрос. Список
+        опрашивается раз в 2 с, наблюдатель завершения - раз в 3 с, и каждый
+        такой опрос обходил рекурсивно base_files ВСЕХ сессий: у сессии с
+        нарезанным альбомом там полсотни файлов, у десятка сессий - тысячи
+        stat'ов в секунду на ровном месте.
+
+        Пересчитывается там, где набор файлов меняется (загрузка, удаление,
+        подготовка прогона, конец прогона - нарезка создаёт части уже внутри
+        него) и лениво - если числа ещё нет, то есть у сессий, созданных до
+        появления этого поля.
+        """
+        meta = meta or self._read_meta(session_id)
+        n = meta.get("n_files")
+        return n if isinstance(n, int) else self.refresh_file_count(session_id)
+
+    def refresh_file_count(self, session_id) -> int:
+        """Пересчитать и запомнить число файлов. Зовётся из мест, где набор
+        файлов изменился."""
+        n = len(self._existing_paths(session_id))
+        try:
+            with self._lock:
+                meta = self._read_meta(session_id)
+                if meta.get("n_files") != n:
+                    meta["n_files"] = n
+                    self._write_meta(meta)
+        except SessionError:
+            pass                # сессию удалили прямо сейчас - считать нечего
+        return n
+
+    def _existing_paths(self, session_id) -> list:
+        """Пути всех файлов сессии относительно её data/ - без определения типа
+        (в отличие от files(), который для типа импортирует ingest).
+
+        Отбор ТОТ ЖЕ, что в files(): в base_files - документы разрешённых
+        форматов, в full_projects - альбомы (только PDF). Иначе число файлов в
+        списке сессий не сошлось бы с длиной списка внутри самой сессии.
+        """
+        paths = self.paths_of(session_id)
+        data_dir = paths["data_dir"]
+        out = []
+        for root, pattern, suffixes in (
+                (paths["base_files_dir"], "**/*", ALLOWED_SUFFIXES),
+                (paths["full_projects_dir"], "*", {".pdf"})):
+            if not root.is_dir():
+                continue
+            for p in root.glob(pattern):
+                if (p.is_file() and p.suffix.lower() in suffixes
+                        and not p.name.startswith(("~$", "."))):
+                    out.append(p.relative_to(data_dir).as_posix())
+        return out
+
+    def _doc_types(self, session_id) -> dict:
+        """Пометки типа {путь относительно data/: тип}, с миграцией старых сессий.
+
+        До V1.7 ключом было ГОЛОЕ ИМЯ файла, и на альбоме это ломалось молча:
+        у каждого шкафа своя подпапка со своим «Общий вид», имена повторяются -
+        пометка одного документа применялась ко всем одноимённым, а пометка
+        «полный проект» для файла в подпапке не находила его вовсе (prepare_run
+        искал строго base_files/<имя>). Сессии на диске переживают обновление,
+        поэтому старые ключи переводим на путь здесь, при первом же чтении:
+        имя, которому нашёлся ровно один файл, переезжает на его путь;
+        неоднозначное или потерявшее файл - отбрасывается (гадать нельзя, а
+        оставить как есть значит навсегда сохранить неработающую пометку).
+        """
+        with self._lock:
+            meta = self._read_meta(session_id)
+            types = dict(meta.get("doc_types") or {})
+            legacy = [k for k in types if "/" not in k]
+            if not legacy:
+                return types
+
+            known = self._existing_paths(session_id)
+            for name in legacy:
+                value = types.pop(name)
+                matches = [p for p in known if p.rsplit("/", 1)[-1] == name]
+                if len(matches) == 1:
+                    types.setdefault(matches[0], value)
+            meta["doc_types"] = types
+            self._write_meta(meta)
+            return types
 
     @staticmethod
     def _is_generated_part(path: Path) -> bool:
         """Лежит ли файл в папке, которую нарезал сплиттер альбомов.
 
-        Метку кладёт full_project.GENERATED_MARKER; читаем её по имени, а не
-        импортом, чтобы web_app не тянул за собой fitz."""
+        Имя метки берём из bundles - он про связки и подпапки и, в отличие от
+        full_project, не тянет fitz, которого в web_app быть не должно."""
         parent = path.parent
-        return parent.name != "base_files" and (parent / ".from_full_project").exists()
+        return (parent.name != "base_files"
+                and (parent / bundles.GENERATED_MARKER).exists())
 
     def resolve_file(self, session_id, rel_path) -> Path:
         """Путь файла сессии по значению поля "path" из files().
@@ -344,21 +444,33 @@ class SessionStore:
             raise SessionError(f"Файл не найден: {rel.name}", 404)
         return target
 
-    def save_upload(self, session_id, filename, data: bytes) -> str:
-        """Кладёт один файл в base_files сессии. В отличие от прежней загрузки,
-        НИЧЕГО не стирает: файлы докладываются, а изоляция пользователей теперь
-        обеспечена самой сессией."""
+    def upload_target(self, session_id, filename) -> Path:
+        """Куда лечь загружаемому файлу. Проверяет сессию и имя, но НЕ пишет.
+
+        Отдельно от записи, потому что тело запроса теперь льётся в файл
+        потоком (см. web_app/multipart.py): решение «принимаем ли мы этот
+        файл» надо принять ДО того, как получен первый его байт, а не после
+        того, как двести мегабайт осели в памяти.
+        """
         meta = self._read_meta(session_id)
         if meta["status"] in ACTIVE_STATUSES:
             raise SessionError("Сессия в очереди или выполняется - файлы менять нельзя", 409)
-        name = Path(filename).name          # отрезаем любой путь со стороны клиента
+        name = Path(filename or "").name    # отрезаем любой путь со стороны клиента
+        if not name:
+            raise SessionError("пустое имя файла", 400)
         if Path(name).suffix.lower() not in ALLOWED_SUFFIXES:
             raise SessionError("неподдерживаемый формат (нужен PDF для схем и чертежей "
                                "либо .xlsx для спецификации)", 400)
         base = self.paths_of(session_id)["base_files_dir"]
         base.mkdir(parents=True, exist_ok=True)
-        (base / name).write_bytes(data)
-        return name
+        return base / name
+
+    def save_upload(self, session_id, filename, data: bytes) -> str:
+        """Загрузка файла целиком из памяти. Осталась для вызовов из консоли и
+        тестов; интерфейс грузит потоком через upload_target."""
+        target = self.upload_target(session_id, filename)
+        target.write_bytes(data)
+        return target.name
 
     def delete_file(self, session_id, rel_path) -> None:
         meta = self._read_meta(session_id)
@@ -366,6 +478,7 @@ class SessionStore:
             raise SessionError("Сессия в очереди или выполняется - файлы менять нельзя", 409)
         paths = self.paths_of(session_id)
         target = self.resolve_file(session_id, rel_path)
+        key = target.relative_to(paths["data_dir"]).as_posix()
         was_album = target.parent == paths["full_projects_dir"]
         target.unlink()
 
@@ -379,8 +492,9 @@ class SessionStore:
 
         with self._lock:
             meta = self._read_meta(session_id)
-            if meta.get("doc_types", {}).pop(target.name, None) is not None:
+            if meta.get("doc_types", {}).pop(key, None) is not None:
                 self._write_meta(meta)
+        self.refresh_file_count(session_id)
 
     def _remaining_albums(self, session_id) -> bool:
         fp = self.paths_of(session_id)["full_projects_dir"]
@@ -390,30 +504,45 @@ class SessionStore:
     @staticmethod
     def _clear_generated_parts(base_files_dir: Path) -> None:
         """То же, что full_project.clear_generated_parts, но без импорта fitz:
-        web_app эту зависимость не тянет (и не должен). Метка одна и та же."""
+        web_app эту зависимость не тянет (и не должен). Метка одна и та же -
+        bundles.GENERATED_MARKER, единственное место, куда дотягиваются оба."""
         if not base_files_dir.is_dir():
             return
         for item in base_files_dir.iterdir():
-            if item.is_dir() and (item / ".from_full_project").exists():
+            if item.is_dir() and (item / bundles.GENERATED_MARKER).exists():
                 shutil.rmtree(item, ignore_errors=True)
 
-    def set_type(self, session_id, filename, doc_type, valid_types) -> None:
+    def set_type(self, session_id, rel_path, doc_type, valid_types) -> None:
         """Пометка типа документа. Хранится в session.json, а не в общем
         data/.doc_types.json: тот был один на весь сервер и ключевался голым
         именем файла, так что две сессии с одинаковым именем файла спорили за
         одну запись. В data/.doc_types.json сессии пометки уезжают только перед
-        запуском - их там ждёт ingest."""
+        запуском - их там ждёт ingest.
+
+        Ключ - ПУТЬ относительно data/ (поле "path" в списке файлов), тот же,
+        которым файл адресуется на просмотр и удаление. Файл обязан
+        существовать: resolve_file и проверяет это, и не пускает путь наружу
+        base_files/full_projects.
+        """
         if doc_type and doc_type not in valid_types:
             raise SessionError(f"Недопустимый тип: {doc_type}", 400)
+        # Голое имя без папки означает файл, лежащий прямо в base_files: так
+        # присылает вкладка, открытая до обновления сервера, и так удобнее
+        # звать метод из консоли.
+        if rel_path and "/" not in str(rel_path) and "\\" not in str(rel_path):
+            rel_path = "base_files/" + str(rel_path)
+        target = self.resolve_file(session_id, rel_path)
+        key = target.relative_to(self.paths_of(session_id)["data_dir"]).as_posix()
+        self._doc_types(session_id)         # миграция старых ключей до записи
         with self._lock:
             meta = self._read_meta(session_id)
             if meta["status"] in ACTIVE_STATUSES:
                 raise SessionError("Сессия в очереди или выполняется - типы менять нельзя", 409)
             types = dict(meta.get("doc_types") or {})
             if doc_type:
-                types[filename] = doc_type
+                types[key] = doc_type
             else:
-                types.pop(filename, None)   # пустой выбор - сброс пометки
+                types.pop(key, None)        # пустой выбор - сброс пометки
             meta["doc_types"] = types
             self._write_meta(meta)
 
@@ -487,8 +616,14 @@ class SessionStore:
 
     # ---------- подготовка к прогону ----------
 
-    def prepare_run(self, session_id) -> dict:
-        """Раскладывает песочницу сессии перед запуском и возвращает её пути.
+    def prepare_run(self, session_id) -> tuple:
+        """Раскладывает песочницу сессии перед запуском.
+
+        Возвращает (пути сессии, пометки типов для пайплайна). Пометки отдаются
+        уже в том виде, в каком их ждёт ingest - ключом относительно base_files,
+        - чтобы один и тот же словарь не жил в двух форматах: в session.json он
+        ключуется путём относительно data/ (как весь остальной интерфейс), а
+        ingest про папку data/ ничего не знает.
 
         Копия base_analysis_scripts кладётся В САМУ сессию, а не шарится:
         промпт агента (oi_agent.py) описывает её как подпапку своей песочницы
@@ -505,27 +640,48 @@ class SessionStore:
                             dirs_exist_ok=True,
                             ignore=shutil.ignore_patterns("__pycache__"))
 
-        meta = self._read_meta(session_id)
-        doc_types = dict(meta.get("doc_types") or {})
+        doc_types = self._doc_types(session_id)
+        data_dir = paths["data_dir"]
 
         # Файлы, помеченные как альбом, переезжают в full_projects/ - там их
         # ждёт full_project.py. Пайплайн опознаёт альбом и сам (по числу
         # листов), но пометка пользователя главнее: она снимает догадку и
         # работает даже на альбоме короче порога.
-        for name in [n for n, t in doc_types.items() if t == FULL_PROJECT_TYPE]:
-            src = paths["base_files_dir"] / name
-            if src.is_file():
-                shutil.move(str(src), str(paths["full_projects_dir"] / name))
-            # в .doc_types.json такая пометка не уезжает: у ingest.py нет
-            # типа документа "full_project", и файл с ним осел бы в
-            # skipped_files с невнятной причиной
-            doc_types.pop(name, None)
+        moved = []
+        for key in [k for k, t in doc_types.items() if t == FULL_PROJECT_TYPE]:
+            src = (data_dir / key)
+            if src.is_file() and src.parent != paths["full_projects_dir"]:
+                shutil.move(str(src), str(paths["full_projects_dir"] / src.name))
+            moved.append(key)
+
+        if moved:
+            # Пометку убираем НАСОВСЕМ, а не только из копии: путь файла
+            # изменился, и прежний ключ не совпал бы уже ни с чем, а тип
+            # переехавшему файлу больше не нужен - о том, что это альбом,
+            # говорит сама папка (files() метит всё в full_projects).
+            with self._lock:
+                meta = self._read_meta(session_id)
+                types = dict(meta.get("doc_types") or {})
+                for key in moved:
+                    types.pop(key, None)
+                meta["doc_types"] = types
+                self._write_meta(meta)
+            doc_types = {k: v for k, v in doc_types.items() if k not in moved}
+
+        # Ключи для пайплайна - относительно base_files: подпапка в base_files
+        # это связка, и путь внутри неё ingest видит, а вот про папку data/,
+        # где base_files лежит, он ничего не знает.
+        prefix = paths["base_files_dir"].relative_to(data_dir).as_posix() + "/"
+        pipeline_types = {
+            k[len(prefix):]: v for k, v in doc_types.items() if k.startswith(prefix)
+        }
 
         # пометки типов - туда, где их ищет ingest (data/.doc_types.json)
-        sidecar = paths["data_dir"] / ".doc_types.json"
+        sidecar = data_dir / ".doc_types.json"
         sidecar.write_text(
-            json.dumps(doc_types, ensure_ascii=False, indent=2), encoding="utf-8")
-        return paths
+            json.dumps(pipeline_types, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.refresh_file_count(session_id)
+        return paths, pipeline_types
 
     def cleanup_after_cancel(self, session_id) -> None:
         """После жёсткой отмены подчищает только результаты незавершённого

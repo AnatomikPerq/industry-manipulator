@@ -50,8 +50,8 @@
 """
 
 import argparse
-import cgi
 import json
+import shutil
 import sys
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -68,9 +68,11 @@ STATIC_DIR = HERE / "static"
 # не только подпроцессом-раннером)
 sys.path.insert(0, str(ANALYZER_DIR))
 
+import ingest                   # noqa: E402  (сверка списка типов документов)
 import main as pipeline          # noqa: E402
 from llm_check import check_server_alive  # noqa: E402  (быстрая проверка сервера)
 
+import multipart                          # noqa: E402  (потоковый разбор загрузки)
 import queue_worker                       # noqa: E402  (константы пула - во фронтенд)
 from queue_worker import AnalysisQueue    # noqa: E402
 from sessions import FULL_PROJECT_TYPE, SessionError, SessionStore  # noqa: E402
@@ -88,14 +90,25 @@ VIEWABLE_TYPES = {
 }
 
 # Типы документов, которые принимает анализатор. Отсюда же фронтенд берёт список
-# для выпадающего выбора типа у каждого загруженного файла - единый источник.
+# для выпадающего выбора типа у каждого загруженного файла.
+#
+# ТЕКСТЫ ЗДЕСЬ СВОИ, А НЕ ИЗ ingest.DOC_TYPES, и это осознанно: там описания
+# написаны ДЛЯ АГЕНТА (что лежит в извлечённых данных и как оно получено), а
+# здесь - для инженера, который выбирает пункт в выпадающем списке. Сводить их
+# в один текст значило бы испортить оба.
+#
+# А вот НАБОР КЛЮЧЕЙ и допустимые расширения обязаны совпадать с пайплайном -
+# это проверяется ниже, на импорте. Расхождение уже случалось: подсказка
+# обещала спецификацию только книгой Excel, хотя PDF-спецификация внутри
+# альбома поддержана с V1.4.
 DOC_TYPES = [
     {"key": "scheme", "title": "Принципиальная схема (Э3)",
      "hint": "Векторный PDF монтажной/принципиальной схемы EPLAN"},
     {"key": "assembly", "title": "Сборочный чертёж (СБ)",
      "hint": "Векторный PDF сборочного чертежа шкафа: вид шкафа с размещением изделий"},
     {"key": "spec", "title": "Спецификация оборудования (СО)",
-     "hint": "Книга Excel (.xlsx) со спецификацией по ГОСТ 21.110"},
+     "hint": "Спецификация по ГОСТ 21.110: книга Excel (.xlsx) либо PDF — "
+             "листом альбома, если спецификация идёт в составе полного проекта"},
     # Под этим ключом живут ТРИ вида табличных документов - вид определяется
     # по заголовкам таблицы уже при извлечении (netlist_to_json.detect_table_kind),
     # выбирать между ними пользователю не нужно.
@@ -113,6 +126,18 @@ DOC_TYPES = [
              "каждый шкаф станет отдельной связкой"},
 ]
 VALID_TYPE_KEYS = {t["key"] for t in DOC_TYPES}
+
+# Список типов не должен разъезжаться с пайплайном. Проверяем на импорте, а не
+# «когда-нибудь заметим»: добавленный в ingest тип, забытый здесь, означает
+# документ, который анализатор умеет читать, но выбрать который в интерфейсе
+# нельзя; забытый в ingest - выбор, после которого файл молча уедет в
+# skipped_files с невнятной причиной.
+_pipeline_types = set(ingest.DOC_TYPES)
+_ui_types = VALID_TYPE_KEYS - {FULL_PROJECT_TYPE}   # альбом - контейнер, а не вид
+assert _ui_types == _pipeline_types, (
+    f"Список типов документов в интерфейсе разошёлся с пайплайном: "
+    f"только в интерфейсе {sorted(_ui_types - _pipeline_types)}, "
+    f"только в ingest.DOC_TYPES {sorted(_pipeline_types - _ui_types)}")
 
 
 def _config_path():
@@ -203,16 +228,25 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_file(self, path: Path, content_type):
+    def _send_file(self, path: Path, content_type, disposition=None):
+        """Отдаёт файл ПОТОКОМ, не поднимая его в память целиком.
+
+        Раньше здесь стоял read_bytes(), и открытие альбома в соседней вкладке
+        (первое, что делает инженер, увидев замечание) поднимало в память
+        сервера сотни мегабайт - на каждый такой клик.
+        """
         if not path.is_file():
             self.send_error(404)
             return
-        data = path.read_bytes()
+        size = path.stat().st_size
         self.send_response(200)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Length", str(size))
+        if disposition:
+            self.send_header("Content-Disposition", disposition)
         self.end_headers()
-        self.wfile.write(data)
+        with open(path, "rb") as f:
+            shutil.copyfileobj(f, self.wfile, length=64 * 1024)
 
     def _body_json(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -285,9 +319,14 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send_json({"ok": True})
                 if action == "set-type":
                     body = self._body_json()
-                    if not body.get("name"):
-                        raise SessionError("Не указано имя файла", 400)
-                    STORE.set_type(session_id, body["name"], body.get("type"),
+                    # path, а не name: у частей альбома имена повторяются от
+                    # шкафа к шкафу, и по имени пометка легла бы сразу на все
+                    # одноимённые файлы. name принимается ради старых вкладок,
+                    # открытых до обновления сервера.
+                    rel_path = body.get("path") or body.get("name")
+                    if not rel_path:
+                        raise SessionError("Не указан файл", 400)
+                    STORE.set_type(session_id, rel_path, body.get("type"),
                                    VALID_TYPE_KEYS)
                     return self._send_json({"ok": True})
                 if action == "enqueue":
@@ -355,11 +394,16 @@ class Handler(BaseHTTPRequestHandler):
             item = dict(meta)
             item["queue_position"] = positions.get(meta["id"])
             item["llm_position"] = llm_positions.get(meta["id"])
-            item["n_files"] = len(STORE.files(meta["id"]))
+            # число файлов берём из session.json, а не пересчитываем обходом
+            # диска: этот список опрашивается раз в 2 с по ВСЕМ сессиям сразу
+            item["n_files"] = STORE.file_count(meta["id"], meta)
             sessions.append(item)
         self._send_json({
             "sessions": sessions,
             "running": snap["running"],
+            # сколько прогонов реально занимают процессор: сессия, ждущая
+            # очереди к ИИ, жива, но ничего не считает
+            "script_busy": snap["script_busy"],
             "queued": snap["queued"],
             "llm_queue": snap["llm_queue"],
             "llm_busy": snap["llm_busy"],
@@ -379,31 +423,52 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(meta, 201)
 
     def _api_upload(self, session_id):
-        """Дозагрузка файлов в сессию. В отличие от прежней глобальной загрузки,
-        НИЧЕГО не стирает: у каждой сессии свой base_files, и затирать чужие
-        файлы больше нечем."""
+        """Дозагрузка файлов в сессию. НИЧЕГО не стирает: у каждой сессии свой
+        base_files, и затирать чужие файлы больше нечем.
+
+        Тело запроса льётся СРАЗУ В ФАЙЛ, кусками (multipart.py). Прежний
+        cgi.FieldStorage складывал загрузку в память целиком, а здесь грузят
+        альбомы на сотни мегабайт - и каждый оседал в оперативной памяти
+        сервера дважды: сам разбор плюс копия от item.file.read().
+        """
         STORE.get(session_id)      # 404, если сессии нет - до чтения тела запроса
-        ctype = self.headers.get("Content-Type", "")
-        if "multipart/form-data" not in ctype:
-            raise SessionError("Ожидается multipart/form-data", 400)
 
-        form = cgi.FieldStorage(
-            fp=self.rfile, headers=self.headers,
-            environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": ctype})
+        saved, skipped, open_files = [], [], []
 
-        saved, skipped = [], []
-        items = form["files"] if "files" in form else []
-        if not isinstance(items, list):
-            items = [items]
-        for item in items:
-            if not getattr(item, "filename", None):
-                continue
+        def open_part(field, filename):
+            """Куда писать эту часть. None - часть пропускается (её байты всё
+            равно будут прочитаны: недочитанное тело браузер видит как обрыв
+            соединения, а не как ответ с объяснением)."""
+            if field != "files":
+                return None
             try:
-                saved.append(STORE.save_upload(session_id, item.filename, item.file.read()))
+                target = STORE.upload_target(session_id, filename)
             except SessionError as e:
                 if e.status == 409:
-                    raise      # сессия занята - дальше загружать нечего
-                skipped.append({"name": Path(item.filename).name, "reason": str(e)})
+                    raise          # сессия занята - принимать нечего вовсе
+                skipped.append({"name": Path(filename).name, "reason": str(e)})
+                return None
+            handle = open(target, "wb")
+            open_files.append((target, handle))
+            saved.append(target.name)
+            return handle
+
+        try:
+            multipart.parse(self.rfile, self.headers.get("Content-Type", ""),
+                            self.headers.get("Content-Length"), open_part)
+        except multipart.MultipartError as e:
+            # недописанные файлы убираем: оборванная загрузка не должна
+            # оставить в сессии PDF, который не откроется
+            for target, handle in open_files:
+                handle.close()
+                target.unlink(missing_ok=True)
+            raise SessionError(str(e), 400)
+        finally:
+            for _, handle in open_files:
+                if not handle.closed:
+                    handle.close()
+
+        STORE.refresh_file_count(session_id)
         self._send_json({"saved": saved, "skipped": skipped})
 
     def _api_enqueue(self, session_id):
@@ -448,16 +513,10 @@ class Handler(BaseHTTPRequestHandler):
         target = STORE.resolve_file(session_id, rel_path)
         ctype, disposition = VIEWABLE_TYPES.get(
             target.suffix.lower(), ("application/octet-stream", "attachment"))
-        data = target.read_bytes()
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(data)))
         # RFC 5987: имена документов кириллические, голым latin-1 их в заголовок
         # не положить - браузер получил бы кракозябры вместо имени файла
-        self.send_header("Content-Disposition",
-                         f"{disposition}; filename*=UTF-8''{quote(target.name)}")
-        self.end_headers()
-        self.wfile.write(data)
+        self._send_file(target, ctype,
+                        f"{disposition}; filename*=UTF-8''{quote(target.name)}")
 
     def _api_report_pdf(self, session_id):
         """Отчёт сессии одним PDF - тем, что уходит инженеру и в архив проекта."""
@@ -522,12 +581,25 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser(description="Веб-интерфейс анализатора документации")
     ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--host", default="127.0.0.1")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="адрес, на котором слушать. По умолчанию только этот "
+                         "компьютер. Открывать наружу - осознанное решение: "
+                         "авторизации в интерфейсе нет (см. предупреждение при "
+                         "запуске)")
     args = ap.parse_args()
 
     QUEUE.start()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"Интерфейс анализатора: http://{args.host}:{args.port}")
+    # Авторизации нет сознательно (инструмент корпоративный, сессии видны всем).
+    # Пока сервер слушает localhost, это ничего не значит; открытый наружу - уже
+    # значит: любой в сети сможет удалить чужую сессию или оборвать чужой прогон.
+    # Сказать об этом надо в момент запуска, а не в README, который не читают.
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(f"ВНИМАНИЕ: сервер слушает {args.host} - он доступен из сети, а "
+              f"авторизации в интерфейсе нет.\n"
+              f"         Любой, кто откроет адрес, сможет запускать, отменять и "
+              f"удалять ЧУЖИЕ сессии вместе с их файлами.")
     print("Ctrl+C для остановки.")
     try:
         server.serve_forever()

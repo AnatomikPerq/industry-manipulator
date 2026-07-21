@@ -34,6 +34,9 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import findings as _findings  # noqa: E402  (общая форма находки и ref'а)
+
 
 DOC_TYPE = "spec"
 SOURCE_FILE = "specification.json"
@@ -41,38 +44,15 @@ SOURCE_FILE = "specification.json"
 
 def _ref(document, row=None, designator=None, article=None, name=None,
          quantity=None, found=None):
-    return {
-        "document": document,
-        "doc_type": DOC_TYPE,
-        "source_file": SOURCE_FILE,
-        "sheet": None,
-        "row": row,
-        "cabinet": None,
-        "terminal_block": None,
-        "pin": None,
-        "terminal_type": None,
-        "marking": None,
-        "kks": None,
-        "conductor": None,
-        "designator": designator,
-        "article": article,
-        "name": name,
-        "quantity": quantity,
-        "found": found,
-    }
+    return _findings.ref(
+        document, DOC_TYPE, SOURCE_FILE,
+        row=row, designator=designator, article=article, name=name,
+        quantity=quantity, found=found)
 
 
 def _finding(kind, severity, type_ru, refs, finding, action, evidence=None):
-    return {
-        "kind": kind,
-        "scope": "single_document",
-        "severity": severity,
-        "type": type_ru,
-        "refs": refs,
-        "finding": finding,
-        "action": action,
-        "evidence": evidence,
-    }
+    return _findings.finding(kind, severity, type_ru, refs, finding, action,
+                            evidence, scope="single_document")
 
 
 def rule_cell_errors(document, doc):
@@ -200,7 +180,7 @@ ALL_RULES = [
     rule_duplicate_code,
 ]
 
-SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+SEVERITY_ORDER = _findings.SEVERITY_ORDER
 
 
 # Правила, которые верны только для спецификации ОДНОГО шкафа. В полном проекте

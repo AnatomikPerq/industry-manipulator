@@ -1,0 +1,4 @@
+# Только для тестов. Сам анализатор ими не пользуется и работает без них.
+#   pip install -r analyzer_to_errors/requirements.txt -r analyzer_to_errors/requirements-dev.txt
+#   pytest
+pytest>=8.0

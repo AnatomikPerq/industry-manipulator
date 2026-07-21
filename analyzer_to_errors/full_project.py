@@ -54,6 +54,10 @@ from pathlib import Path
 
 import fitz
 
+import bundles
+import normalize
+import script_loader
+
 logger = logging.getLogger(__name__)
 
 # Порог, с которого альбом считается "полным проектом", а не одиночным
@@ -147,29 +151,18 @@ CABINET_STOP = {
     "СПЕРЕДИ", "СЗАДИ", "СБОКУ", "СЛЕВА", "СПРАВА",
 }
 
-# Латинские буквы, неотличимые на вид от кириллических. Бюро мешает раскладки
-# прямо внутри одного альбома: однолинейная схема подписана "ЩC1" с ЛАТИНСКОЙ
-# C, а принципиальная того же шкафа - "ЩС1" с кириллической. Без приведения к
-# одной раскладке это два разных ключа, то есть две разные связки, и два
-# документа ОДНОГО шкафа никогда не сверятся друг с другом - молча, без единого
-# сообщения об ошибке. Ровно тот сорт отказа, ради которого в bundles.py
-# запрещено угадывать связку по имени файла.
-_HOMOGLYPHS = str.maketrans({
-    "A": "А", "B": "В", "C": "С", "E": "Е", "H": "Н", "K": "К", "M": "М",
-    "O": "О", "P": "Р", "T": "Т", "X": "Х", "Y": "У", "I": "І",
-})
-
-
-def _unify_layout(token: str) -> str:
-    """Привести смешанную раскладку к кириллице.
-
-    Только для токенов, где кириллица УЖЕ есть: чисто латинское обозначение
-    ("PLC", "DO1") - это не мешанина раскладок, а честная латиница, и портить
-    её нельзя.
-    """
-    if any("А" <= ch <= "я" or ch == "Ё" or ch == "ё" for ch in token):
-        return token.translate(_HOMOGLYPHS)
-    return token
+# Бюро мешает раскладки прямо внутри одного альбома: однолинейная схема
+# подписана "ЩC1" с ЛАТИНСКОЙ C, а принципиальная того же шкафа - "ЩС1" с
+# кириллической. Без приведения к одной раскладке это два разных ключа, то есть
+# две разные связки, и два документа ОДНОГО шкафа никогда не сверятся друг с
+# другом - молча, без единого сообщения об ошибке. Ровно тот сорт отказа, ради
+# которого в bundles.py запрещено угадывать связку по имени файла.
+#
+# Таблица омоглифов - общая с bundle_rules (normalize.py). Там сворачивают в
+# ЛАТИНИЦУ: нужен ключ сравнения, и направление безразлично. Здесь - в
+# КИРИЛЛИЦУ: обозначение шкафа становится именем папки и названием связки,
+# которое читает человек.
+_unify_layout = normalize.to_cyrillic
 
 
 def _norm(s: str) -> str:
@@ -184,12 +177,8 @@ def _load_font_fix(scripts_dir: Path, pdf_path: Path):
     выверена в schematic_diagram_to_data.py - переиспользуем её, а не пишем
     второй раз (второй раз неизбежно разъедется с первым).
     """
-    import importlib.util
-
-    path = scripts_dir / "schematic_diagram_to_data.py"
-    spec = importlib.util.spec_from_file_location("_fp_font_fix", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = script_loader.load(scripts_dir, "schematic_diagram_to_data.py",
+                                require=("analyze_fonts", "apply_font_fix"))
     return module.analyze_fonts(str(pdf_path)), module.apply_font_fix
 
 
@@ -240,16 +229,7 @@ def _title_cell(lines):
 def _load_progress(scripts_dir):
     """Модуль сообщений о ходе работы из папки скриптов (она копируется в
     каждую сессию, поэтому грузим по пути). Не нашёлся - работаем молча."""
-    import importlib.util
-
-    try:
-        spec = importlib.util.spec_from_file_location(
-            "_progress", Path(scripts_dir) / "progress.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-    except Exception:  # noqa: BLE001
-        return None
+    return script_loader.try_load(scripts_dir, "progress.py")
 
 
 def read_sheet_titles(pdf_path, scripts_dir):
@@ -381,7 +361,11 @@ COMMON_BUNDLE_DIR = "общие документы"
 # перед новым прогоном стереть части прошлой нарезки и не оставить документы от
 # альбома, который пользователь уже удалил: связка со шкафом, которого больше
 # нет во входных файлах, тихо сверялась бы сама с собой.
-GENERATED_MARKER = ".from_full_project"
+#
+# Живёт в bundles.py: ту же метку читает web_app/sessions.py, а он по замыслу
+# работает на голой стандартной библиотеке и импортировать этот модуль (с его
+# fitz) не может.
+GENERATED_MARKER = bundles.GENERATED_MARKER
 
 
 def clear_generated_parts(base_files_dir):

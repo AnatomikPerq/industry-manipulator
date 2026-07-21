@@ -1,0 +1,128 @@
+{
+  "_comment": "Эталон находок детерминированных чекеров. Обновлять ТОЛЬКО после ручного разбора расхождения по чертежу - см. шапку tests/test_baseline.py.",
+  "findings": [
+    {
+      "kind": "REVIEW",
+      "severity": "medium",
+      "type": "Изделие пропало с парного листа чертежа",
+      "refs": [
+        {
+          "document": "026.822.13-ИПК  ЩСКЗ СБ_19.05.26",
+          "doc_type": "assembly",
+          "sheet": 3,
+          "designator": "GB1"
+        },
+        {
+          "document": "026.822.13-ИПК  ЩСКЗ СБ_19.05.26",
+          "doc_type": "assembly",
+          "sheet": 1,
+          "designator": "GB1"
+        }
+      ]
+    },
+    {
+      "kind": "REVIEW",
+      "severity": "medium",
+      "type": "Изделие пропало с парного листа чертежа",
+      "refs": [
+        {
+          "document": "026.822.13-ИПК  ЩСКЗ СБ_19.05.26",
+          "doc_type": "assembly",
+          "sheet": 5,
+          "designator": "HL5"
+        },
+        {
+          "document": "026.822.13-ИПК  ЩСКЗ СБ_19.05.26",
+          "doc_type": "assembly",
+          "sheet": 1,
+          "designator": "HL5"
+        }
+      ]
+    },
+    {
+      "kind": "DUPLICATE",
+      "severity": "high",
+      "type": "Дубль адреса клеммы на листе",
+      "refs": [
+        {
+          "document": "Итог1",
+          "doc_type": "scheme",
+          "sheet": 3,
+          "terminal_block": "1XT5",
+          "pin": "3"
+        },
+        {
+          "document": "Итог1",
+          "doc_type": "scheme",
+          "sheet": 3,
+          "terminal_block": "1XT5",
+          "pin": "3"
+        }
+      ]
+    },
+    {
+      "kind": "DUPLICATE",
+      "severity": "high",
+      "type": "Дубль адреса клеммы на листе",
+      "refs": [
+        {
+          "document": "Итог1",
+          "doc_type": "scheme",
+          "sheet": 4,
+          "terminal_block": "5XT1",
+          "pin": "1"
+        },
+        {
+          "document": "Итог1",
+          "doc_type": "scheme",
+          "sheet": 4,
+          "terminal_block": "5XT1",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "kind": "DUPLICATE",
+      "severity": "high",
+      "type": "Две катушки реле с одним обозначением",
+      "refs": [
+        {
+          "document": "Итог1",
+          "doc_type": "scheme",
+          "sheet": 2,
+          "designator": "2KL2"
+        },
+        {
+          "document": "Итог1",
+          "doc_type": "scheme",
+          "sheet": 2,
+          "designator": "2KL2"
+        }
+      ]
+    },
+    {
+      "kind": "MISSING",
+      "severity": "high",
+      "type": "Изделие с чертежа и схемы отсутствует в спецификации",
+      "refs": [
+        {
+          "document": "026.822.13-ИПК  ЩСКЗ СО_19.05.26",
+          "doc_type": "spec",
+          "designator": "QF1"
+        },
+        {
+          "document": "026.822.13-ИПК  ЩСКЗ СБ_19.05.26",
+          "doc_type": "assembly",
+          "sheet": 1,
+          "designator": "QF1"
+        },
+        {
+          "document": "Итог1",
+          "doc_type": "scheme",
+          "sheet": 1,
+          "designator": "QF1"
+        }
+      ]
+    }
+  ]
+}

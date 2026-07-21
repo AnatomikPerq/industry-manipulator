@@ -75,46 +75,24 @@ import sys
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import findings as _findings  # noqa: E402  (общая форма находки и ref'а)
+import normalize              # noqa: E402  (омоглифы и ведущие нули - см. ниже)
+
 
 
 # ============================================================
 # Нормализация
 # ============================================================
 
-# Кириллические буквы, неотличимые на вид от латинских. В российских проектах
-# их мешают постоянно: 'ХТ01' кириллицей и 'XT01' латиницей выглядят
-# ОДИНАКОВО, но это разные строки. Без сворачивания омоглифов сверка
-# документов дала бы поток ложных "элемент не найден" на ровном месте.
-HOMOGLYPHS = str.maketrans({
-    "А": "A", "В": "B", "Е": "E", "К": "K", "М": "M", "Н": "H", "О": "O",
-    "Р": "P", "С": "C", "Т": "T", "У": "Y", "Х": "X",
-    "а": "a", "е": "e", "о": "o", "р": "p", "с": "c", "у": "y", "х": "x",
-})
-
-_NORM_STRIP_RE = re.compile(r"[\s]+")
-
-
-def norm(s):
-    """Ключ сравнения для АРТИКУЛОВ: омоглифы свёрнуты в латиницу, регистр и
-    пробелы убраны. Ведущие нули НЕ трогаются: у артикулов каждая цифра
-    значащая ('8000099046' и '800099046' - разные изделия)."""
-    if s is None:
-        return ""
-    return _NORM_STRIP_RE.sub("", str(s).translate(HOMOGLYPHS).upper())
-
-
-# Ведущие нули в числовой группе. В обозначениях они НЕЗНАЧАЩИЕ: спецификация
-# пишет 'XA1', сборочный чертёж - 'XA001', и это одна и та же клеммная колодка.
-# Без сворачивания нулей сверка ША1/ИК давала десятки ложных "изделия нет на
-# чертеже" на ровном месте (XA1..XA19 против XA001..XA019 - 19 находок из воздуха).
-_LEADING_ZERO_RE = re.compile(r"(?<![0-9])0+(?=[0-9])")
-
-
-def norm_designator(s):
-    """Ключ сравнения для ПОЗИЦИОННЫХ ОБОЗНАЧЕНИЙ: как norm(), плюс свёрнутые
-    ведущие нули. Только ключ сравнения - наружу (в находку) всегда идёт
-    обозначение в том виде, в каком оно написано в документе."""
-    return _LEADING_ZERO_RE.sub("", norm(s))
+# Свёртывание омоглифов и ведущих нулей живёт в normalize.py - ОДНОЙ таблицей
+# на весь проект. Второй её пользователь, full_project.detect_cabinet,
+# сворачивает в другую сторону (обозначение шкафа читает человек, и оно должно
+# остаться кириллическим), и разойдись эти таблицы на одну букву - документы
+# одного шкафа разъехались бы по двум связкам молча. Здесь оставлены короткие
+# имена: ими пестрит весь модуль.
+norm = normalize.fold
+norm_designator = normalize.fold_designator
 
 
 # Разделители внутри одной подписи. На чертеже в ОДНОМ текстовом span'е часто
@@ -375,38 +353,17 @@ def _is_empty(dtype, data):
 
 def _ref(document, doc_type, source_file, sheet=None, row=None, designator=None,
          article=None, name=None, quantity=None, found=None):
-    return {
-        "document": document,
-        "doc_type": doc_type,
-        "source_file": source_file,
-        "sheet": sheet,
-        "row": row,
-        "cabinet": None,
-        "terminal_block": None,
-        "pin": None,
-        "terminal_type": None,
-        "marking": None,
-        "kks": None,
-        "conductor": None,
-        "designator": designator,
-        "article": article,
-        "name": name,
-        "quantity": quantity,
-        "found": found,
-    }
+    """Место находки по связке. Проводных полей (клеммник, штифт, KKS) здесь
+    нет по построению: связка сверяется по ПОЗИЦИОННЫМ ОБОЗНАЧЕНИЯМ изделий,
+    а не по проводам."""
+    return _findings.ref(document, doc_type, source_file, sheet=sheet, row=row,
+                         designator=designator, article=article, name=name,
+                         quantity=quantity, found=found)
 
 
 def _finding(kind, scope, severity, type_ru, refs, finding, action, evidence=None):
-    return {
-        "kind": kind,
-        "scope": scope,
-        "severity": severity,
-        "type": type_ru,
-        "refs": refs,
-        "finding": finding,
-        "action": action,
-        "evidence": evidence,
-    }
+    return _findings.finding(kind, severity, type_ru, refs, finding, action,
+                             evidence, scope=scope)
 
 
 # ============================================================
@@ -957,7 +914,7 @@ ALL_RULES = [
     rule_spec_element_not_on_assembly,
 ]
 
-SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
+SEVERITY_ORDER = _findings.SEVERITY_ORDER
 
 
 def check_bundle(bundle, docs):

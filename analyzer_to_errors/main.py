@@ -23,44 +23,45 @@ CLI:
 4) Каждый JSON-результат проходит валидацию по схеме (schema.py) с
    автоматическим циклом исправления. Если модель так и не выдала
    валидный JSON - поднимается validation.JSONValidationError.
+
+ГДЕ ЧТО ЛЕЖИТ. Здесь остался ПОРЯДОК стадий и всё, что связано с агентами;
+сами стадии вынесены, потому что занимали больше половины файла и заслоняли
+run_pipeline - то единственное, ради чего main.py зовут снаружи:
+
+    settings.py     - пути, config.yaml (+ config.local.yaml), resolve_path
+    stages.py       - извлечение, правила по документам, сверка связок
+    text_report.py  - текстовый отчёт для консоли
+    known_filter.py - гашение заранее известных ошибок
+
+Имена стадий и настроек ПЕРЕЭКСПОРТИРУЮТСЯ отсюда: main - фасад пайплайна, и
+снаружи его зовут как pipeline.load_config / pipeline.run_rules_stage.
 """
 
 import argparse
 import json
 import logging
 import sys
-import traceback
-from collections import Counter
 from pathlib import Path
 
-import yaml
-
-import full_project
-from ingest import ExtractionError, run_extraction
+import known_filter
+from ingest import ExtractionError
 from llm_check import check_server_alive, run_checks
 from oi_agent import run_analysis_agent
 from merge_reports import merge_reports
-from schema import SEVERITY_ENUM
+from text_report import format_extraction_report, format_text_report
 from validation import JSONValidationError
 
+# Пути и конфиг живут в settings.py, стадии - в stages.py. Здесь они
+# ПЕРЕЭКСПОРТИРУЮТСЯ, потому что main - это фасад пайплайна: снаружи его зовут
+# как pipeline.load_config / pipeline.resolve_path / pipeline.run_rules_stage
+# (web_app/server.py, web_app/_pipeline_runner.py, report_pdf.py, тесты), и
+# ломать эти вызовы ради перестановки файлов незачем.
+from settings import (PROJECT_ROOT, SEVERITY_ORDER, load_config,  # noqa: F401
+                      resolve_path)
+from stages import (load_type_overrides, run_bundle_stage,  # noqa: F401
+                    run_extraction_stage, run_rules_stage)
+
 logger = logging.getLogger("error_analyzer")
-
-PROJECT_ROOT = Path(__file__).resolve().parent
-
-SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
-
-
-def load_config(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
-
-
-def resolve_path(p) -> Path:
-    """Пути из config.yaml - относительно корня проекта, а не cwd:
-    пайплайн должен работать одинаково, откуда бы его ни запустили
-    (в т.ч. из бэкенда сайта с произвольной рабочей директорией)."""
-    path = Path(p)
-    return path if path.is_absolute() else (PROJECT_ROOT / path).resolve()
 
 
 def load_known_errors(path) -> list:
@@ -75,152 +76,6 @@ def load_known_errors(path) -> list:
 def resolve_merger_cfg(cfg: dict) -> dict:
     merger_key = cfg["llm_servers"]["merger"]["use_agent"]
     return cfg["llm_servers"][merger_key]
-
-
-def _format_ref(ref: dict) -> str:
-    """Одно место находки в человекочитаемом виде - примерно те же поля,
-    что станут колонками таблицы на сайте."""
-    where = []
-    if ref.get("sheet") is not None:
-        where.append(f"лист {ref['sheet']}")
-    if ref.get("row") is not None:
-        where.append(f"строка {ref['row']}")
-
-    what = []
-    if ref.get("cabinet"):
-        what.append(f"шкаф {ref['cabinet']}")
-    if ref.get("terminal_block") or ref.get("pin"):
-        what.append(f"клемма {ref.get('terminal_block') or '?'}/{ref.get('pin') or '?'}")
-    if ref.get("marking"):
-        what.append(f"маркировка {ref['marking']}")
-    if ref.get("kks"):
-        what.append(f"KKS {ref['kks']}")
-    if ref.get("conductor"):
-        what.append(f"проводник {ref['conductor']}")
-
-    head = f"[{ref.get('doc_type')}] {ref.get('document')}"
-    if where:
-        head += " (" + ", ".join(where) + ")"
-
-    out = [f"      {head}"]
-    if what:
-        out.append(f"        {'; '.join(what)}")
-    if ref.get("found"):
-        out.append(f"        найдено: {ref['found']}")
-    return "\n".join(out)
-
-
-def format_text_report(merged: dict) -> str:
-    errors = merged.get("errors", [])
-    lines = []
-    summary = merged.get("summary")
-    if summary:
-        lines.append(f"Резюме: {summary}")
-        lines.append("")
-
-    by_kind = Counter(e.get("kind") for e in errors)
-    by_severity = Counter(e.get("severity") for e in errors)
-    lines.append(f"Найдено замечаний: {len(errors)}")
-    if errors:
-        lines.append("  по видам: " + ", ".join(f"{k}={v}" for k, v in by_kind.most_common()))
-        lines.append("  по важности: " + ", ".join(
-            f"{s}={by_severity[s]}" for s in SEVERITY_ENUM if by_severity[s]))
-    lines.append("=" * 70)
-
-    for i, err in enumerate(errors, 1):
-        lines.append(f"[{i}] {err.get('kind')} | {err.get('severity')} | {err.get('type')}")
-        lines.append(f"    ({err.get('scope')})")
-        for ref in err.get("refs", []):
-            lines.append(_format_ref(ref))
-        lines.append(f"    что найдено: {err.get('finding')}")
-        lines.append(f"    что делать:  {err.get('action')}")
-        if err.get("evidence"):
-            lines.append(f"    подтверждение: {err.get('evidence')}")
-        lines.append("-" * 70)
-    return "\n".join(lines)
-
-
-def format_extraction_report(manifest: dict) -> str:
-    lines = ["Извлечение данных из PDF:", "=" * 60]
-    for doc in manifest["documents"]:
-        mark = {"ok": "OK  ", "partial": "ЧАСТЬ", "failed": "FAIL"}[doc["status"]]
-        lines.append(f"[{mark}] ({doc['doc_type']}) {doc['name']}")
-        lines.append(f"    парсеры: {', '.join(doc['parsers'])}")
-        lines.append(f"    данные: {doc['data_dir']}/")
-        if doc["files"]:
-            lines.append(f"    файлы: {', '.join(doc['files'])}")
-            for k, v in doc["stats"].items():
-                lines.append(f"      {k}: {v}")
-        for err in doc["errors"]:
-            lines.append(f"    ОШИБКА: {err}")
-        lines.append("-" * 60)
-    for sk in manifest["skipped_files"]:
-        lines.append(f"[SKIP] {sk['source_file']}")
-        lines.append(f"    причина: {sk['reason']}")
-        lines.append("-" * 60)
-    s = manifest["summary"]
-    lines.append(f"Документов: {s['total_documents']}, извлечено: {s['extracted_ok']}, "
-                 f"ошибок: {s['failed']}, пропущено: {s['skipped']}")
-    return "\n".join(lines)
-
-
-def load_type_overrides(cfg: dict) -> dict:
-    """Пометки типа документа, выставленные пользователем в веб-интерфейсе.
-
-    Лежат в data/.doc_types.json (пишет web_app/server.py при выборе типа в
-    списке файлов). Читаем их и здесь, чтобы CLI и сайт видели одно и то же:
-    иначе `python main.py` игнорировал бы типы, заданные в интерфейсе, и падал
-    на файлах без пометки в имени.
-    """
-    path = resolve_path(cfg["paths"]["input_dir"]) / ".doc_types.json"
-    if not path.is_file():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def run_extraction_stage(cfg: dict, doc_types: dict = None,
-                         bundles: dict = None) -> dict:
-    """Стадия 0: PDF/XLSX -> data/<имя документа>/*.json + data/manifest.json.
-
-    Тип документа берётся (по убыванию приоритета): из doc_types (передан явно,
-    например с формы загрузки) -> из data/.doc_types.json -> из имени файла
-    (марка вида по ГОСТ "Э3"/"СБ"/"СО" либо пометка "(scheme)...").
-
-    bundles: {"имя файла": "связка 1"} - явная привязка документа к связке.
-    Если не передано, связка определяется по подпапке в base_files или по
-    общему префиксу имени файла (см. bundles.py).
-    """
-    paths = cfg["paths"]
-
-    # Альбомы целиком режутся на отдельные документы ДО извлечения: базовый
-    # парсер рассчитан на документ одного вида, а у листа внутри альбома нет
-    # имени файла, по которому пайплайн определяет тип. Части выкладываются в
-    # base_files/<шкаф>/, после чего всё идёт обычным путём.
-    if paths.get("full_projects_dir"):
-        reports = full_project.split_full_projects(
-            full_projects_dir=resolve_path(paths["full_projects_dir"]),
-            base_files_dir=resolve_path(paths["base_files_dir"]),
-            scripts_dir=resolve_path(paths["scripts_dir"]),
-        )
-        for rep in reports:
-            logger.info("Полный проект %s: %d листов -> %d документов "
-                        "(%d частей не анализируется)",
-                        rep["source_file"], rep["total_pages"],
-                        len(rep["parts_written"]), len(rep["parts_skipped"]))
-
-    overrides = doc_types or load_type_overrides(cfg)
-    return run_extraction(
-        base_files_dir=resolve_path(paths["base_files_dir"]),
-        scripts_dir=resolve_path(paths["scripts_dir"]),
-        data_dir=resolve_path(paths["input_dir"]),
-        overrides=overrides,
-        overwrite=not cfg.get("extraction", {}).get("reuse_existing", False),
-        bundle_overrides=bundles,
-    )
 
 
 def _finding_signature(finding: dict) -> tuple:
@@ -241,243 +96,19 @@ def _finding_signature(finding: dict) -> tuple:
     return (finding.get("kind"), points)
 
 
-def run_rules_stage(cfg: dict, data_dir: Path) -> list:
-    """Стадия правил: детерминированные чекеры по КАЖДОМУ типу документа.
-
-    Читает manifest.json и прогоняет по каждому документу чекер его типа:
-      netlist  -> netlist_rules.check_connections_file (connections.json)
-      scheme   -> schematic_rules.check_schematic_file (nets.json)
-      spec     -> spec_rules.check_specification_file (specification.json)
-      assembly -> assembly_rules.check_assembly_file (assembly.json)
-    Возвращает находки в формате schema.REPORT_SCHEMA - том же, что у агентов.
-    LLM здесь не участвует.
-
-    Здесь долго стояло, что у СБОРОЧНОГО ЧЕРТЕЖА однодокументного чекера нет и
-    быть не может: в одиночку чертёж проверять нечем, всё проверяется сверкой с
-    другими документами связки. Это оказалось неверно. Чертёж многолистовой, и
-    одно изделие показано на нескольких листах сразу (общий вид, вид двери,
-    таблица надписей); изделие, выпавшее с одного из них, доказывается ВНУТРИ
-    самого чертежа - см. assembly_rules.py. Сверка с другими документами
-    по-прежнему живёт отдельно, на стадии связок (run_bundle_stage).
-
-    Раньше здесь стоял фильтр `if doc_type != "netlist": continue`, из-за которого
-    схемы не проверялись вообще: анализ комплекта из одних схем всегда давал ноль
-    замечаний независимо от содержимого.
-    """
-    manifest_path = data_dir / "manifest.json"
-    if not manifest_path.exists():
-        logger.warning("manifest.json не найден в %s - стадия правил пропущена", data_dir)
-        return []
-
-    scripts_dir = resolve_path(cfg["paths"]["scripts_dir"])
-
-    # чекер на тип документа: (скрипт, функция, файл с данными)
-    checkers = {
-        "netlist": ("netlist_rules.py", "check_connections_file", "connections.json"),
-        "scheme": ("schematic_rules.py", "check_schematic_file", "nets.json"),
-        "spec": ("spec_rules.py", "check_specification_file", "specification.json"),
-        "assembly": ("assembly_rules.py", "check_assembly_file", "assembly.json"),
-    }
-
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    findings = []
-    for doc in manifest.get("documents", []):
-        checker = checkers.get(doc.get("doc_type"))
-        if checker is None:
-            # Тип без своего чекера - не сбой: документ всё равно участвует в
-            # сверке связки (run_bundle_stage) и его видят агенты.
-            logger.info("  %s (%s): отдельных правил для этого вида документа нет, "
-                        "он проверяется сверкой с другими документами связки",
-                        doc.get("name"), doc.get("doc_type"))
-            continue
-        script, func_name, data_file = checker
-
-        data_path = PROJECT_ROOT / doc["data_dir"] / data_file
-        if not data_path.exists():
-            logger.warning("  %s: нет файла %s - правила не применены",
-                           doc["name"], data_file)
-            continue
-
-        # Спецификация из связки "общие документы" описывает ВЕСЬ объект, а не
-        # шкаф: часть правил на ней неприменима (см. SINGLE_CABINET_ONLY_RULES
-        # в spec_rules.py). Флаг ставится только спецификации - остальные
-        # чекеры такого параметра не принимают, а в общей связке лежит ещё и
-        # кабельный журнал.
-        kwargs = {}
-        if (doc.get("doc_type") == "spec"
-                and doc.get("bundle") == full_project.COMMON_BUNDLE_DIR):
-            kwargs["project_wide"] = True
-
-        try:
-            module = _load_parser_module(scripts_dir, script)
-            doc_findings = getattr(module, func_name)(doc["name"], str(data_path), **kwargs)
-        except Exception as e:  # noqa: BLE001 - падение чекера не должно ронять прогон
-            logger.error("  %s: чекер %s упал: %s", doc["name"], script, e)
-            continue
-
-        logger.info("  правила по %s (%s): %d находок",
-                    doc["name"], doc["doc_type"], len(doc_findings))
-        findings.extend(doc_findings)
-    return findings
-
-
-def _lend_project_wide_docs(groups: dict) -> None:
-    """Одолжить спецификацию всего объекта каждой связке-шкафу.
-
-    В полном проекте спецификация одна на весь объект и шкафа в наименовании не
-    называет, поэтому попадает в связку "общие документы"
-    (full_project.COMMON_BUNDLE_DIR). Без этого шага у связок-шкафов нет
-    спецификации ВООБЩЕ, а значит вся сверка по связке молча не выполняется -
-    и самые дорогие ошибки (изделие нарисовано, но не заказано) на альбоме не
-    ищутся, хотя ровно ради них всё и затевалось.
-
-    Одолженная спецификация помечается project_wide: она описывает ВЕСЬ объект,
-    и направление сверки "строка спецификации -> её нет на чертеже" по ней
-    бессмысленно (в спецификации штатно лежит оборудование остальных двенадцати
-    шкафов). Обратное направление - "обозначение есть на чертеже и схеме, но в
-    спецификации его нет" - остаётся верным и работает.
-    """
-    common = groups.get(full_project.COMMON_BUNDLE_DIR)
-    if not common or "spec" not in common:
-        return
-
-    for bundle, docs in groups.items():
-        if bundle == full_project.COMMON_BUNDLE_DIR or "spec" in docs:
-            continue
-        if not any(t in docs for t in ("assembly", "scheme")):
-            continue
-        docs["spec"] = dict(common["spec"], project_wide=True)
-        logger.info("Связка %r: подключена общая спецификация объекта (%s)",
-                    bundle, common["spec"]["name"])
-
-
-def _doc_quality(doc_type: str, stats: dict) -> tuple:
-    """Сколько полезного извлечено из документа - ключ выбора ГЛАВНОГО документа
-    типа внутри связки (см. run_bundle_stage). Метрики берутся из статистики
-    манифеста, самые говорящие - первыми: у принципиальной схемы всегда больше
-    привязанных клемм, чем у однолинейной или схемы внешних соединений, у
-    полного чертежа больше уникальных обозначений, чем у листа-продолжения."""
-    if doc_type == "scheme":
-        return (stats.get("terminals_on_scheme") or 0,
-                stats.get("wire_markings_on_scheme") or 0,
-                stats.get("nets") or 0)
-    if doc_type == "assembly":
-        return (stats.get("assembly_unique_designators") or 0,
-                stats.get("assembly_elements") or 0)
-    if doc_type == "spec":
-        return (stats.get("spec_rows") or 0,)
-    if doc_type == "netlist":
-        return (stats.get("total_connections") or 0,)
-    return (0,)
-
-
-def run_bundle_stage(cfg: dict, data_dir: Path) -> list:
-    """Стадия СВЯЗОК: детерминированная сверка документов ОДНОГО шкафа между собой.
-
-    Стадия правил (run_rules_stage) проверяет каждый документ по отдельности и
-    по построению не видит ошибок ВИДА "в спецификации один артикул, а на
-    чертеже другой". Здесь документы группируются по связкам (поле bundle в
-    манифесте, см. bundles.py) и каждая связка целиком отдаётся bundle_rules.py.
-
-    LLM здесь не участвует. Возвращает находки в формате schema.REPORT_SCHEMA.
-    """
-    manifest_path = data_dir / "manifest.json"
-    if not manifest_path.exists():
-        logger.warning("manifest.json не найден в %s - стадия связок пропущена", data_dir)
-        return []
-
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    documents = manifest.get("documents", [])
-    if not documents:
-        return []
-
-    scripts_dir = resolve_path(cfg["paths"]["scripts_dir"])
-    try:
-        module = _load_parser_module(scripts_dir, "bundle_rules.py")
-    except Exception as e:  # noqa: BLE001
-        logger.error("Чекер связок не загрузился: %s", e)
-        return []
-
-    # {связка: {тип документа: сведения}}. Документов одного типа в связке
-    # бывает НЕСКОЛЬКО - в альбоме у шкафа рядом лежат принципиальная,
-    # однолинейная и схема внешних соединений, а чертёж разбит на "Общий вид" и
-    # "Вид спереди". Раньше для сверки молча брался первый по списку - и им
-    # оказывалась схема внешних соединений (сортировка!), у которой почти нет
-    # обозначений приборов: сверка «нарисовано, но не заказано» на альбоме
-    # тихо вырождалась. Теперь главным выбирается документ с самыми полными
-    # данными (_doc_quality), остальные передаются чекеру связки в "extra" -
-    # он объединяет их обозначения с главным (см. bundle_rules.check_bundle).
-    groups = {}
-    for doc in documents:
-        if doc.get("status") == "failed":
-            continue
-        bundle = doc.get("bundle") or "без связки"
-        slot = groups.setdefault(bundle, {})
-        dtype = doc.get("doc_type")
-        slot.setdefault(dtype, []).append({
-            "name": doc["name"],
-            "data_dir": str(PROJECT_ROOT / doc["data_dir"]),
-            "source": doc.get("source_file"),
-            "stats": doc.get("stats") or {},
-        })
-
-    for bundle, slot in groups.items():
-        for dtype, candidates in slot.items():
-            candidates.sort(key=lambda d: _doc_quality(dtype, d["stats"]),
-                            reverse=True)
-            primary = candidates[0]
-            if len(candidates) > 1:
-                primary["extra"] = candidates[1:]
-                logger.info("Связка %r: документов типа %r несколько - главный для "
-                            "сверки %s, обозначения остальных (%s) объединяются с ним",
-                            bundle, dtype, primary["name"],
-                            ", ".join(d["name"] for d in candidates[1:]))
-            # Документ, извлечённый ПУСТЫМ, - это провал парсера, а не пустой
-            # шкаф. Пускать его в сверку нельзя: пустая спецификация читается
-            # правилами как «ничего не заказано» и на КОС дала 16 ложных
-            # "изделие не заказано" из 17 находок. Чекер связки перепроверяет
-            # то же сам (check_bundle), здесь - предупреждение в лог.
-            if not any(_doc_quality(dtype, primary["stats"])):
-                logger.warning("Связка %r: %s извлёкся пустым - в сверке связки "
-                               "он участвовать не будет", bundle, primary["name"])
-            slot[dtype] = primary
-
-    _lend_project_wide_docs(groups)
-
-    findings = []
-    for bundle, docs in groups.items():
-        try:
-            bundle_findings = module.check_bundle(bundle, docs)
-        except Exception as e:  # noqa: BLE001 - падение чекера не должно ронять прогон
-            logger.error("  связка %r: чекер упал: %s", bundle, e)
-            logger.debug(traceback.format_exc())
-            continue
-        logger.info("  сверка связки %r (%s): %d находок", bundle,
-                    ", ".join(sorted(t for t in docs if t)), len(bundle_findings))
-        findings.extend(bundle_findings)
-    return findings
-
-
-def _load_parser_module(scripts_dir: Path, script_name: str):
-    """Импорт скрипта из data/base_analysis_scripts по пути к файлу (как в ingest)."""
-    import importlib.util
-    import sys as _sys
-    path = scripts_dir / script_name
-    mod_name = f"_stage_{path.stem}"
-    if mod_name in _sys.modules:
-        return _sys.modules[mod_name]
-    spec = importlib.util.spec_from_file_location(mod_name, path)
-    module = importlib.util.module_from_spec(spec)
-    _sys.modules[mod_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-def combine_rule_and_agent_findings(rule_findings: list, merged: dict) -> dict:
+def combine_rule_and_agent_findings(rule_findings: list, merged: dict,
+                                    known_errors: list = None) -> dict:
     """Соединяет находки чекера и итог агентов. Находки чекера - ground truth: они
     ВСЕГДА в итоге. Из находок агентов выбрасываем те, что дублируют находку чекера
     (по подписи), чтобы одно и то же не выводилось дважды. Результат сортируем по
-    важности."""
+    важности.
+
+    known_errors применяются ЗДЕСЬ, а не только в промпте мерджера. Мерджер видит
+    лишь отчёты агентов, а находки чекера приходят мимо него - и в режиме «без ИИ»
+    (как и при agents.count = 1) его нет вовсе. Пока фильтр жил только в промпте,
+    погасить ложное срабатывание чекера было нечем, хотя ровно ради этого файл и
+    заведён. Сопоставление - по частичному совпадению полей, см. known_filter.
+    """
     rule_sigs = {_finding_signature(f) for f in rule_findings}
     agent_errors = [e for e in merged.get("errors", [])
                     if _finding_signature(e) not in rule_sigs]
@@ -485,7 +116,8 @@ def combine_rule_and_agent_findings(rule_findings: list, merged: dict) -> dict:
     if dropped:
         logger.info("Из находок агентов убрано %d дублей находок чекера", dropped)
 
-    combined = rule_findings + agent_errors
+    combined = known_filter.filter_findings(rule_findings + agent_errors,
+                                            known_errors or [])
     combined.sort(key=lambda f: SEVERITY_ORDER.get(f.get("severity"), 9))
     merged["errors"] = combined
     return merged
@@ -662,10 +294,15 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
 
     if skip_agents:
         logger.info("Режим без ИИ: агенты и мерджер пропущены, отчёт только из находок чекера")
+        # known_errors применяются и здесь: мерджера в этом режиме нет, а он был
+        # единственным местом, где файл вообще читался. Без этого «известная
+        # ошибка» гасилась только при полном прогоне с ИИ - ровно наоборот тому,
+        # чего ждёшь от режима «только скрипты».
+        errors = known_filter.filter_findings(rule_findings, known_errors)
         merged = {
-            "errors": sorted(rule_findings,
+            "errors": sorted(errors,
                              key=lambda f: SEVERITY_ORDER.get(f.get("severity"), 9)),
-            "summary": (f"Анализ без ИИ (только скрипты): найдено {len(rule_findings)} "
+            "summary": (f"Анализ без ИИ (только скрипты): найдено {len(errors)} "
                         f"замечаний детерминированными чекерами документов и сверкой "
                         f"связок."),
         }
@@ -740,7 +377,7 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
 
     # Находки чекера добавляем ПОСЛЕ LLM-слияния и детерминированно: они ground truth
     # и не должны потеряться на слиянии (слабая модель-сшиватель уже роняла находки).
-    merged = combine_rule_and_agent_findings(rule_findings, merged)
+    merged = combine_rule_and_agent_findings(rule_findings, merged, known_errors)
     logger.info("Итоговых находок: %d (из них от чекера: %d)",
                 len(merged["errors"]), len(rule_findings))
 
@@ -791,6 +428,10 @@ def main():
         cfg = load_config(args.config)
         data_dir = resolve_path(args.input or cfg["paths"]["input_dir"])
         findings = run_rules_stage(cfg, data_dir) + run_bundle_stage(cfg, data_dir)
+        # тот же фильтр, что и в полном прогоне: иначе быстрый цикл отладки
+        # показывал бы находки, которых в отчёте пользователя уже нет
+        findings = known_filter.filter_findings(findings, load_known_errors(
+            resolve_path(args.known_errors or cfg["paths"]["known_errors_file"])))
         print(format_text_report({"errors": sorted(
             findings, key=lambda f: SEVERITY_ORDER.get(f.get("severity"), 9)),
             "summary": f"Детерминированные чекеры документов и сверка связок: "
