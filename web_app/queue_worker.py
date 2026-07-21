@@ -105,6 +105,7 @@ class AnalysisQueue:
         self._cancelled = set()        # id, для которых пришла отмена
         self._threads = []
         self._progress_written = {}    # id -> когда прогресс последний раз лёг на диск
+        self._progress_pending = {}    # id -> придержанное сообщение о листе
 
     # ---------- запуск ----------
 
@@ -403,14 +404,23 @@ class AnalysisQueue:
             return
         kind = payload.get("kind")
 
-        # Придерживаем запись: листы летят по десятку в секунду, а браузер
+        # Придерживаем запись: листы летят десятками в секунду, а браузер
         # опрашивает статус раз в секунду - чаще писать файл незачем. Смену
-        # документа и конец работы пишем всегда: их пропуск был бы виден.
+        # документа, стадию и конец работы пишем всегда: их пропуск был бы виден.
+        #
+        # Придержанное сообщение ЗАПОМИНАЕТСЯ, а не выбрасывается, и уходит на
+        # диск следующим тиком. Иначе последний лист документа (после которого
+        # сообщений уже не будет) терялся, и на экране навсегда оставался
+        # предпоследний - а на быстрых документах и вовсе первый попавшийся.
+        now = time.monotonic()
         if kind == "page":
-            last = self._progress_written.get(session_id, 0.0)
-            if time.monotonic() - last < 0.4:
+            self._progress_pending[session_id] = payload
+            if now - self._progress_written.get(session_id, 0.0) < 0.4:
                 return
-        self._progress_written[session_id] = time.monotonic()
+            payload = self._progress_pending.pop(session_id, payload)
+        else:
+            self._progress_pending.pop(session_id, None)
+        self._progress_written[session_id] = now
 
         try:
             if kind == "done":
@@ -424,6 +434,8 @@ class AnalysisQueue:
                                 doc_type=payload.get("doc_type"),
                                 doc_index=payload.get("index"),
                                 doc_total=payload.get("total"),
+                                # по нему интерфейс подсвечивает строку в списке файлов
+                                path=payload.get("path"),
                                 page=None, page_total=None, stage=None)
             elif kind == "page":
                 progress.update(page=payload.get("page"),

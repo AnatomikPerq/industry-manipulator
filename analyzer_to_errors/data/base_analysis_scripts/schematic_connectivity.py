@@ -599,7 +599,7 @@ def page_cross_refs(page, nets_geom, spans, profile=None):
 # ============================================================
 
 def build_connectivity(pdf_path):
-    raw_pages, font_fix_map = _base.extract_raw(pdf_path)
+    raw_pages, font_fix_map = _base.extract_raw(pdf_path, stage="повторное чтение схемы")
     profile = _base.profiles.detect_profile(raw_pages, font_fix_map)
     raw_pages = _base.merge_split_tags(raw_pages, profile)
     pages = _base.classify_pages(raw_pages, profile)
@@ -608,10 +608,15 @@ def build_connectivity(pdf_path):
     all_cross_refs = []
     all_dup_terminals = []
     all_coils = []
+    dense_pages = []
     total_t = 0
     total_hairlines = 0
 
-    for page in pages:
+    for n_page, page in enumerate(pages, 1):
+        # Склейка цепей - вторая по длительности часть разбора схемы (около 8 с
+        # из 9,6 на 70 листах Енисея). Без этой строки счётчик листов замирал
+        # здесь на всё время работы, показывая последний прочитанный лист.
+        _base.progress.page(n_page, len(pages), stage="сборка цепей схемы")
         page_num = page["page_number"]
         spans = page["text_spans"]
         wires, _bbox = _base._filter_wire_candidates(
@@ -619,8 +624,20 @@ def build_connectivity(pdf_path):
         wires, n_hairlines = drop_glyph_hairlines(wires)
         total_hairlines += n_hairlines
 
+        # Проверки по НАДПИСЯМ делаем всегда: они дешёвые и от густоты графики
+        # не зависят. А вот склейку цепей на листе-картинке - нет, см. ниже.
         all_dup_terminals.extend(find_duplicate_terminal_addresses(page))
         all_coils.extend(find_relay_coils(page))
+
+        if _base.is_dense_graphic(wires):
+            # План расположения или разрез, подшитый в документ со схемами:
+            # десятки тысяч отрезков штриховки, ни одной клеммы. Склейка цепей
+            # на таком листе занимала минуты и давала «цепи» из архитектурной
+            # графики. См. is_dense_graphic в schematic_diagram_to_data.py.
+            dense_pages.append({"page": page_num, "lines": len(wires)})
+            print(f"  [nets] page {page_num}: {len(wires)} отрезков - это план/разрез, "
+                  f"а не схема; цепи не собираются", file=sys.stderr)
+            continue
 
         nets, t_junctions = build_nets(wires)
         total_t += t_junctions
@@ -690,8 +707,12 @@ def build_connectivity(pdf_path):
         r["target_sheet_exists"] = (r["target_sheet"] is None
                                     or 1 <= r["target_sheet"] <= total_sheets)
 
+    if dense_pages:
+        print(f"  [nets] листов пропущено как графика (планы/разрезы): "
+              f"{len(dense_pages)}", file=sys.stderr)
+
     return (all_nets, all_cross_refs, total_sheets, total_t, all_dup_terminals,
-            total_hairlines, all_coils)
+            total_hairlines, all_coils, dense_pages)
 
 
 def build_terminal_index(nets):
@@ -720,7 +741,7 @@ def extract_to_dir(pdf_path, out_dir):
     os.makedirs(out_dir, exist_ok=True)
 
     (nets, cross_refs, total_sheets, total_t, dup_terminals,
-     n_hairlines, coils) = build_connectivity(pdf_path)
+     n_hairlines, coils, dense_pages) = build_connectivity(pdf_path)
     terminal_index = build_terminal_index(nets)
     dup_coils = find_duplicate_relay_coils(coils)
 
@@ -768,6 +789,11 @@ def extract_to_dir(pdf_path, out_dir):
             "duplicate_terminal_addresses": len(dup_terminals),
             "relay_coils": len(coils),
             "duplicate_relay_coils": len(dup_coils),
+            # Листы, цепи на которых сознательно не собирали: это планы и
+            # разрезы, подшитые в документ со схемами (см. is_dense_graphic).
+            # Пустая цепь на них - не результат анализа, а его отсутствие, и
+            # молчать об этом нельзя.
+            "pages_skipped_as_graphics": len(dense_pages),
             "nets_with_2plus_terminals": sum(1 for n in nets if len(n["terminals"]) >= 2),
             "nets_with_1_terminal": sum(1 for n in nets if len(n["terminals"]) == 1),
             "nets_without_terminals": sum(1 for n in nets if not n["terminals"]),
@@ -775,6 +801,7 @@ def extract_to_dir(pdf_path, out_dir):
             "cross_refs_total": len(cross_refs),
             "cross_refs_broken": len(broken_refs),
         },
+        "pages_skipped_as_graphics": dense_pages,
         "cross_sheet_links": cross_refs,
         "broken_cross_sheet_links": broken_refs,
         "duplicate_terminal_addresses": dup_terminals,
@@ -821,6 +848,8 @@ def extract_to_dir(pdf_path, out_dir):
         "terminals_on_scheme": len(terminal_index),
         "wire_markings_on_scheme": len(marking_index),
         "nets_with_2plus_terminals": nets_doc["summary"]["nets_with_2plus_terminals"],
+        # листы-планы, на которых цепи сознательно не собирались
+        "pages_skipped_as_graphics": len(dense_pages),
         "cross_refs_broken": len(broken_refs),
         "dangling_net_candidates": len(dangling),
         "duplicate_terminal_addresses": len(dup_terminals),

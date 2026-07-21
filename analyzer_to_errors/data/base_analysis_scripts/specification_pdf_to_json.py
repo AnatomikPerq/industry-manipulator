@@ -34,6 +34,19 @@ specification_to_json.py. Разбор строки (раскрытие диап
 Имя поля колонке даётся по тексту заголовка над ней, а не по порядку из ГОСТ:
 бюро добавляют свои колонки (в корпусе встречались таблицы на 16 и на 9).
 
+СЛУЖЕБНАЯ СТРОКА НУМЕРАЦИИ КОЛОНОК ("1 2 3 ... N") НЕОБЯЗАТЕЛЬНА
+
+Первая версия парсера использовала её как ворота листа: нет строки нумерации -
+лист не спецификация. На "11-463-2026-АТХ" это оказалось неверно: бюро рисует
+ту же таблицу ГОСТ 21.110 БЕЗ строки нумерации, и все 7 листов спецификации
+шкафа (и 5 листов объектной) молча пропускались - spec_rows: 0, а сверка связки
+при этом честно работала с пустой спецификацией и выдала 16 ложных "изделие не
+заказано" из 17 находок. Теперь строка нумерации - лишь один из двух способов
+найти низ шапки; без неё шапка находится по самим заголовкам («Поз.»,
+«Наименование...», «Кол.»), и воротами листа служит требование "нашлись колонки
+«Количество» и «Наименование»" - у случайного листа таких заголовков над
+линовкой нет.
+
 КАК НАХОДЯТСЯ СТРОКИ
 
 Якорь строки - значение в колонке «Количество»: оно стоит ровно одно на строку
@@ -90,9 +103,14 @@ DESIGNATION_RE = re.compile(r"^[0-9][0-9.\-]{3,}[A-ZА-ЯЁ0-9.\-]*$")
 # таблицы - поэтому вычисленный низ таблицы съезжает на штамп. Строка, в ячейках
 # которой стоят графы штампа, отбрасывается явно: это дешевле и надёжнее, чем
 # отличать линовку таблицы от линовки штампа геометрически.
+# Граница после образца - «дальше не буква», а не \b: половина образцов
+# кончается точкой («изм.», «подп.»), а \b между точкой и пробелом не
+# срабатывает вовсе - с ним "Изм. Кол.уч." штампом не опознавался.
 STAMP_RE = re.compile(
-    r"^(изм\.|кол\.\s*уч|лист|№\s*док|подп\.|дата|взам\.?\s*инв|инв\.\s*№|"
-    r"формат|копировал|стадия|листов)\b", re.I)
+    r"^(кол\.\s*уч|№\s*док|взам\.?\s*инв|инв\.\s*№|н\.\s*контр|"
+    r"изм|лист|подп|дата|формат|копировал|стадия|листов|"
+    r"разраб|проверил|пров|утвердил|согласовал|гип|гап)"
+    r"(?![а-яёa-z])", re.I)
 
 
 def _norm(s):
@@ -113,7 +131,13 @@ def _join_fragments(texts):
         t = _norm(t)
         if not t:
             continue
-        if out.endswith("-"):
+        # Склейка переноса - только когда перед дефисом БУКВА («Количе-» /
+        # «ство»). Диапазон позиций, перенесённый на другую строку («1KL1 -» /
+        # «1KL12»), кончается дефисом ПОСЛЕ ПРОБЕЛА - склеив его, мы съедали
+        # разделитель диапазона, '1KL1 1KL12' переставал быть диапазоном, и
+        # десять промежуточных реле «не были заказаны» (вал ложных MISSING
+        # на связке КОС - 459 находок, почти все отсюда).
+        if out.endswith("-") and len(out) >= 2 and out[-2].isalpha():
             out = out[:-1] + t
         elif out:
             out += " " + t
@@ -236,19 +260,59 @@ def _column_separators(page):
     return merged, bottom
 
 
-def _map_columns(lines, number_row, separators, page_width):
+def _header_bottom_from_titles(lines, page_height):
+    """Низ шапки таблицы, когда служебной строки нумерации на листе нет.
+
+    Ищем в верхней части листа сами заголовки колонок (по образцам
+    COLUMN_PATTERNS) и берём низ самого глубокого из них. Порог 0.4 высоты -
+    шапка не бывает ниже, а данные («Количество 246») выше него уже есть, и
+    сопоставлять образцы со всем листом нельзя.
+
+    Заголовок узкой колонки набран в несколько строк с переносом ("Код обору-" /
+    "дования," / "изделия," / "материала"), и НИЖНИЕ строки ни с одним образцом
+    не совпадают. Оборвать шапку на последнем совпавшем образце - значит отдать
+    эти обрывки первой строке данных ("материала" уезжало в ячейку кода первой
+    позиции листа). Поэтому низ дотягивается поглощением: строка, начинающаяся
+    вплотную под текущим низом шапки, - её продолжение. Данные так не
+    захватываются: между шапкой и первой строкой таблицы всегда есть просвет.
+    """
+    bottom = None
+    top_lines = [l for l in lines if l["y0"] <= page_height * 0.4]
+    for l in top_lines:
+        text = _norm(l["text"]).lower()
+        if any(p in text for _, patterns in COLUMN_PATTERNS for p in patterns):
+            bottom = l["y1"] if bottom is None else max(bottom, l["y1"])
+    if bottom is None:
+        return None
+
+    changed = True
+    while changed:
+        changed = False
+        for l in top_lines:
+            # строка начинается не глубже, чем вплотную под текущим низом
+            # (в т.ч. перекрывает его), а кончается ниже - шапка продолжается.
+            # Зазор 4 px: в форме 7-а («Завод-изготовитель ... страна, фирма»)
+            # строки шапки набраны с чуть большим межстрочным просветом.
+            if l["y0"] <= bottom + 4.0 and l["y1"] > bottom:
+                bottom = l["y1"]
+                changed = True
+    return bottom
+
+
+def _map_columns(lines, header_bottom, separators, page_width, number_row=None):
     """{поле: (x_lo, x_hi)} - колонки таблицы, названные по тексту заголовка."""
-    header_bottom = min(l["y0"] for l in number_row)
     headers = [l for l in lines if l["y1"] <= header_bottom + 2]
 
     if separators:
         edges = [0.0] + [float(x) for x in separators] + [float(page_width)]
-    else:
+    elif number_row:
         # запасной путь, если линовку прочитать не удалось: середины между
         # цифрами служебной строки. Грубее, но лучше, чем ничего.
         centers = [l["xc"] for l in number_row]
         edges = [0.0] + [(a + b) / 2 for a, b in zip(centers, centers[1:])]
         edges.append(float(page_width))
+    else:
+        return {}
 
     mapping = {}
     for lo, hi in zip(edges, edges[1:]):
@@ -277,16 +341,30 @@ def _cell(row_lines, span):
     return _join_fragments(p["text"] for p in parts)
 
 
-def _rows_from_page(lines, mapping, page_height, table_bottom, row_rules):
-    """Разбить строки листа на строки таблицы по якорям в колонке «Количество»."""
+def _rows_from_page(lines, mapping, page_height, table_bottom, row_rules, top):
+    """Разбить строки листа на строки таблицы по якорям в колонке «Количество».
+
+    top - низ шапки (данные начинаются ниже него). Раньше он вычислялся как
+    "всё, что выше 20% высоты листа, - шапка": на листах АТХ шапка кончается на
+    9% высоты, данные начинаются на 13%, и первые три-четыре строки каждого
+    листа молча съедались бы. Верх обязан приходить от найденной шапки.
+    """
     qty_span = mapping.get("quantity")
     if qty_span is None:
         return []
     lo, hi = qty_span
-    top = max((l["y1"] for l in lines if l["y1"] < page_height * 0.2), default=0)
     bottom = table_bottom if table_bottom else page_height * 0.88
 
-    lines = [l for l in lines if l["y0"] > top and l["y1"] <= bottom + 2]
+    # Графы штампа, приклеивающиеся к последней строке листа. Вычисленный низ
+    # таблицы иногда съезжает на штамп (его вертикали идут по тем же X), и
+    # «Кол.уч. Лист № док.» приезжало в ячейку кода последней позиции. Сами
+    # строки-штампы уже отбрасываются по STAMP_RE ниже, но здесь надо убрать
+    # ОТДЕЛЬНЫЕ строки текста, попавшие в чужую полосу. Только в нижней
+    # четверти листа: выше штампа не бывает, а в данных бывают слова
+    # «лист»/«дата» в наименованиях.
+    lines = [l for l in lines
+             if l["y0"] > top and l["y1"] <= bottom + 2
+             and not (l["y0"] > page_height * 0.75 and STAMP_RE.match(l["text"].strip()))]
 
     anchors = sorted(
         (l for l in lines
@@ -328,10 +406,23 @@ def parse_pdf(path):
             _progress.page(page_no, len(doc), stage="чтение спецификации")
             lines = _page_lines(page, font_map)
             number_row = _find_number_row(lines, page.rect.height)
-            if not number_row:
-                continue
+            if number_row:
+                # По ГОСТ под шапкой стоит строка нумерации колонок: её верх -
+                # низ шапки, её низ - верх данных (сами цифры "1 2 3..." в
+                # данные попадать не должны: одиночная цифра в колонке
+                # «Количество» - валидный якорь строки).
+                header_bottom = min(l["y0"] for l in number_row)
+                data_top = max(l["y1"] for l in number_row)
+            else:
+                # Бюро АТХ рисует ту же таблицу БЕЗ строки нумерации - шапку
+                # ищем по самим заголовкам колонок.
+                header_bottom = _header_bottom_from_titles(lines, page.rect.height)
+                if header_bottom is None:
+                    continue
+                data_top = header_bottom
             separators, table_bottom = _column_separators(page)
-            mapping = _map_columns(lines, number_row, separators, page.rect.width)
+            mapping = _map_columns(lines, header_bottom, separators,
+                                   page.rect.width, number_row)
             if "quantity" not in mapping or "name" not in mapping:
                 continue
             pages_parsed += 1
@@ -346,7 +437,7 @@ def parse_pdf(path):
                         break
 
             for row in _rows_from_page(lines, mapping, page.rect.height, table_bottom,
-                                       _row_rules(page)):
+                                       _row_rules(page), data_top):
                 name = _cell(row["lines"], mapping.get("name"))
                 pos_raw = _cell(row["lines"], mapping.get("position"))
                 code = _cell(row["lines"], mapping.get("code"))

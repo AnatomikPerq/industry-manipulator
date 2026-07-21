@@ -281,13 +281,17 @@ def extract_raw_page(page, page_num, font_fix_map=None):
     return result
 
 
-def extract_raw(pdf_path):
+def extract_raw(pdf_path, stage="чтение схемы"):
+    """stage - как назвать этот проход в интерфейсе. Параметр нужен потому, что
+    схему читают ДВА парсера подряд (этот и schematic_connectivity), и без
+    разных подписей счётчик листов дважды пробегает 1→N под одним и тем же
+    названием - пользователь видит, что прогресс «откатился в начало»."""
     print("  [fonts] анализ шрифтов для определения фикса кодировки...", file=sys.stderr)
     font_fix_map = analyze_fonts(pdf_path)
     doc = fitz.open(pdf_path)
     pages = []
     for i, page in enumerate(doc):
-        progress.page(i + 1, len(doc), stage="чтение схемы")
+        progress.page(i + 1, len(doc), stage=stage)
         pages.append(extract_raw_page(page, i + 1, font_fix_map))
         print(f"  [raw] page {i+1}/{len(doc)}: "
               f"{len(pages[-1]['text_spans'])} spans, "
@@ -527,6 +531,36 @@ def drop_glyph_hairlines(lines):
     return stroked, len(lines) - len(stroked)
 
 
+# Выше этого числа отрезков лист перестаёт считаться схемой. Замер по корпусу
+# (124 листа): у САМОГО густого настоящего листа схемы 4885 отрезков, 95-й
+# процентиль - 3194. А в альбоме Енисея внутри документа «Схема внешних
+# подключений» лежат два ПЛАНА РАСПОЛОЖЕНИЯ оборудования и кабельных трасс:
+# 147333 и 99330 отрезков при 12 и 7 текстовых надписях (весь текст на них
+# начерчен кривыми). Порог стоит между этими группами с четырёхкратным запасом
+# в обе стороны.
+DENSE_GRAPHIC_LINES = 20000
+
+
+def is_dense_graphic(wires):
+    """Лист-картинка (план, разрез, 3D-вид), а не принципиальная схема.
+
+    Такие листы попадают внутрь документа со схемами законно: сплиттер альбома
+    режет по наименованию основной надписи, и план расположения, подшитый в
+    конец «Схемы внешних подключений», остаётся частью этого документа.
+
+    Геометрический анализ на них не просто бесполезен - он квадратичен. Поиск
+    пересечений на листе 42 Енисея занимал 58 секунд, сборка цепей - минуты, и
+    всё это ради «цепей» архитектурной штриховки. Проверять тут нечего: на плане
+    нет ни клемм, ни маркировок проводов, а сам список пересечений и на нормальных
+    листах ничего не доказывает (см. комментарий к find_wire_crossings).
+
+    Отличаем по числу отрезков, а НЕ по наименованию листа: наименование - это
+    привычка бюро (ровно та причина, по которой связку нельзя угадывать по имени
+    файла), а густота - свойство самого листа.
+    """
+    return len(wires) > DENSE_GRAPHIC_LINES
+
+
 def _chain_segments(lines):
     def key(x, y):
         return (round(x / SNAP_TOL), round(y / SNAP_TOL))
@@ -684,7 +718,10 @@ def build_graph(classified_pages, max_link_dist=12.0, profile=None):
     profile = profile or profiles.DEFAULT_PROFILE
     all_nodes, all_edges, all_cross_links = [], [], []
     offset = 0
-    for page in classified_pages:
+    for i, page in enumerate(classified_pages, 1):
+        # Самая долгая часть разбора схемы (6,5 с из 9 на 70 листах) - о ней и
+        # надо сообщать. Чтение PDF, где прогресс стоял раньше, занимает 1,5 с.
+        progress.page(i, len(classified_pages), stage="построение графа проводов")
         nodes, edges, cross_links = build_page_graph(page, max_link_dist, profile)
         for n in nodes:
             n["id"] += offset
@@ -911,6 +948,10 @@ def find_wire_crossings(page, wire_candidates):
     тому же набору отрезков.
     """
     wires, n_hairlines = drop_glyph_hairlines(wire_candidates)
+    if is_dense_graphic(wires):
+        # Не схема, а план/разрез - см. is_dense_graphic. Возвращаем пусто, а не
+        # считаем полчаса штриховку.
+        return [], n_hairlines
     dots = detect_junction_dots(page)
     grid = _bbox_grid(wires)
 
@@ -1031,9 +1072,20 @@ def check_wire_gauge_vs_width(page, wire_candidates, max_dist=8.0):
 def build_issue_candidates(classified_pages, profile=None):
     profile = profile or profiles.DEFAULT_PROFILE
     all_crossings, all_terminal_anomalies, all_gauge_checks = [], [], []
+    dense_pages = []
     for page in classified_pages:
         wire_candidates, _ = _filter_wire_candidates(
             page["lines"], page["width"], page["height"])
+
+        stroked, _ = drop_glyph_hairlines(wire_candidates)
+        if is_dense_graphic(stroked):
+            # Говорим об этом вслух: молча пропущенный лист выглядел бы как
+            # «на этом листе пересечений нет», что неправда.
+            dense_pages.append({"page": page["page_number"], "lines": len(stroked)})
+            print(f"  [issues] page {page['page_number']}: {len(stroked)} отрезков - "
+                  f"это план/разрез, а не схема; геометрия не анализируется",
+                  file=sys.stderr)
+            continue
 
         crossings, n_hairlines = find_wire_crossings(page, wire_candidates)
         all_crossings.extend(crossings)
@@ -1057,11 +1109,15 @@ def build_issue_candidates(classified_pages, profile=None):
         "wire_crossings_without_dot": crossings_no_dot,
         "terminal_order_anomalies": all_terminal_anomalies,
         "wire_gauge_vs_line_width": all_gauge_checks,
+        # Листы, геометрию которых сознательно не разбирали (планы, разрезы,
+        # виды): на них десятки тысяч отрезков штриховки и ни одной клеммы.
+        "pages_skipped_as_graphics": dense_pages,
         "summary": {
             "total_crossings": len(all_crossings),
             "crossings_with_dot": len(crossings_with_dot),
             "crossings_without_dot": len(crossings_no_dot),
             "terminal_order_anomalies": len(all_terminal_anomalies),
+            "pages_skipped_as_graphics": len(dense_pages),
             "note": ("Это НЕ список подтверждённых ошибок, а геометрические "
                      "кандидаты для дальнейшей проверки (нейросетью или "
                      "инженером). crossings_with_dot стоит смотреть в первую "
@@ -1121,6 +1177,9 @@ def extract_to_dir(pdf_path, out_dir):
         "wire_crossings_with_dot": issues["summary"]["crossings_with_dot"],
         "wire_crossings_without_dot": issues["summary"]["crossings_without_dot"],
         "terminal_order_anomalies": issues["summary"]["terminal_order_anomalies"],
+        # видно в манифесте и в логе прогона: сколько листов документа оказались
+        # планами/разрезами и геометрически не разбирались
+        "pages_skipped_as_graphics": issues["summary"]["pages_skipped_as_graphics"],
     }
     return files, summary
 

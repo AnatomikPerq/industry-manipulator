@@ -116,6 +116,22 @@ header in `schematic_rules.py`. Do not re-attempt it without first fixing the ex
 depends on (markings are bound to a net by radius, so a dense sheet hands a net its
 neighbour's numbers).
 
+**Альбомный корпус — папка `на проверку/`** (в корне репозитория, не в `data/`): два
+полных проекта, на которых замерены V1.6-правки. Прогонять их — изолированной
+папкой-сессией внутри `analyzer_to_errors/sessions/` (config с абсолютными путями, альбом
+в `full_projects/`), НЕ в общий `data/` — иначе смешается с корпусом ЩСКЗ. Базлайны:
+
+* `11-463-2026-АТХ Енисей.pdf` (184 л., один шкаф ЛСУ КОС) — **4 находки**: дубль катушки
+  `5K9` (л.40/50, одинаковая позиция — копипаста листа), `C6` на чертеже и схеме, но не в
+  спецификации, и два расхождения артикулов (`HLA` 828163≠828165, `XF` ASK 2S≠351109).
+  До правок было 489, из них ~480 ложных: спецификация без строки нумерации колонок
+  парсилась в 0 строк, диапазоны `1K1 - 1K24` не раскрывались, `230VAC` считался артикулом.
+* `24-051-ЭОМ_2026.06.23.pdf` (237 л., 13 связок-шкафов) — **35 находок**: 23 MISSING
+  «нарисовано+на схеме, но не заказано» (лампы `1HL03..13` панели 1 ВРУ и т.п. — в
+  объектной спецификации их действительно нет), 4 дубля `XDO4:13` (подписан с ОБЕИХ
+  сторон контакта «ПУСК» — тот же подтверждённый паттерн, что `5XT1:1` на ЩСКЗ),
+  4 INCOMPLETE по спецификации, 3 MISMATCH, 1 REVIEW. До правок было 85.
+
 The previous corpus (`связка 1|2`: ША1 + ШУ-ТМ, baseline 11 findings) is **no longer in the
 repo** — only the two Э3 schematics survive, in git history under `на проверку/`. They are
 still the false-positive corpus for schematic rules (profiles C and D): recover them with
@@ -199,6 +215,19 @@ still the false-positive corpus for schematic rules (profiles C and D): recover 
    the spec, spec item not on the drawing.
    Findings from both stages are ground truth and are merged back deterministically.
 
+   **Документов одного типа в связке бывает НЕСКОЛЬКО** — в альбоме у шкафа лежат
+   принципиальная + однолинейная + схема внешних соединений, а чертёж разбит на «Общий
+   вид» и «Вид спереди». Раньше молча брался первый по списку, и им оказывалась схема
+   внешних соединений (сортировка!) — у неё почти нет обозначений приборов, и сверка
+   «нарисовано, но не заказано» на альбоме тихо вырождалась. Теперь главный выбирается
+   по полноте данных (`_doc_quality` в `main.py`: у принципиальной всегда больше
+   привязанных клемм), остальные едут в `extra` и их обозначения объединяются
+   (`load_scheme_bundle`/`load_assembly_bundle`), а ссылка находки ведёт на документ,
+   где обозначение реально подписано (`tag["doc"]`). **Документ, извлёкшийся пустым, из
+   сверки исключается** (`_is_empty` в `bundle_rules` + статус `partial` и `warnings` в
+   манифесте): пустая спецификация читается правилами как «ничего не заказано» — 16
+   ложных MISSING из 17 находок на КОС, ровно так и найденные.
+
    **Спецификация полного проекта одна на весь объект** и лежит в связке `общие
    документы`. Без неё у связок-шкафов спецификации нет вообще, и вся сверка молча не
    выполняется — поэтому `_lend_project_wide_docs` (`main.py`) одалживает её каждому шкафу
@@ -227,9 +256,23 @@ still the false-positive corpus for schematic rules (profiles C and D): recover 
    делает его артикулом: маркировка вывода по МЭК (`1/L1`, `2/T1`, `13NO`, `A1`) проходит
    фильтр цифры и отсекается отдельно (`IEC_TERMINAL_RE`) — на ЩС1 полного проекта две
    находки из трёх были ровно такими, причём подписями выводов одного контактора
-   оказывались ОБЕ стороны пары (артикул `1/L1` при позиции `13NO`). Where a guess is
-   unavoidable ("not drawn — forgotten, or simply never drawn?"), the finding is a `REVIEW`
-   (a question for the engineer), not an assertion of error.
+   оказывались ОБЕ стороны пары (артикул `1/L1` при позиции `13NO`). Ещё три замеренных
+   капкана (V1.6, альбомы `на проверку/`): «артикул», спаренный с МАССОЙ обозначений, —
+   типовая подпись на картинке изделия, а не артикул (`230VAC` у КАЖДОГО реле КОС — 630
+   пар, 320 ложных «разный артикул» из 322; порог `MASS_CAPTION_MIN_DESIGNATORS`, у
+   настоящих артикулов максимум 19) плюс явный фильтр номинала (`VOLTAGE_RE`);
+   обозначение в `rule_designator_not_in_spec` обязано ОКАНЧИВАТЬСЯ цифрой по ГОСТ 2.710
+   (`3HL`, `17SA` — обрезанные подписи, 14 из 21 находки по ПЭСПЗ) и не быть
+   МЭК-маркировкой (`1NO`); подпись-диапазон `FU1-FU3` в спецификации лежит по одному
+   (`FU1`, `FU2`, `FU3`) и целиком не найдётся никогда — если все части есть, изделия
+   заказаны. В `schematic_rules.rule_duplicate_terminal_address` два фильтра с той же
+   родословной: клеммы шин `N`/`PE` подписываются у каждого присоединения (все 6 находок
+   ЭОМ по ним ложные), а клеммник, у которого на листе задублирован ЦЕЛЫЙ РЯД адресов
+   (`7X1:1..4` по два раза), — повторно изображённый клеммник чужого шкафа (типовая
+   обвязка двух вентагрегатов на одном листе ЩОВ, 26 «дублей»), тогда как настоящие
+   ошибки — одиночный дубль при уникальных соседях (обе ЩСКЗ, `XDO4:13` на ЭОМ). Where a
+   guess is unavoidable ("not drawn — forgotten, or simply never drawn?"), the finding is
+   a `REVIEW` (a question for the engineer), not an assertion of error.
 3. **Agents** (`oi_agent.py`, Open Interpreter) — two independently-configured LLM agents
    (`llm_servers.agent_1` / `agent_2` in `config.yaml`) each analyze the whole `data/`
    folder, writing and executing their own code rather than having files pushed into
@@ -273,7 +316,32 @@ exposing `extract_to_dir(path, out_dir) -> (files, stats)`:
   `_seg_intersect` still decides. **34.7 s → 0.02 s**, crossings 13901 → 241, ЩСКЗ baseline
   still exactly 6. If extraction ever "hangs while the CPU idles" again, look for another
   quadratic loop before reaching for C or multiprocessing.
-- `netlist` → `netlist_to_json.py`
+
+  **Лист-картинка не схема** (`is_dense_graphic`, порог `DENSE_GRAPHIC_LINES = 20000`).
+  Сплиттер альбома режет по наименованию штампа, поэтому план расположения, подшитый в
+  конец «Схемы внешних подключений», остаётся листом этого документа. На двух таких
+  листах Енисея 147333 и 99330 отрезков при 12 и 7 надписях (текст начерчен кривыми) —
+  поиск пересечений занимал на них 58 с и 22 с, сборка цепей ещё четыре минуты, и всё
+  ради «цепей» архитектурной штриховки. Замер по 124 листам корпуса: у самого густого
+  НАСТОЯЩЕГО листа схемы 4885 отрезков, 95-й процентиль 3194 — порог стоит между
+  группами с четырёхкратным запасом в обе стороны. Отличаем по густоте, а НЕ по
+  наименованию листа: наименование — привычка бюро (ровно та причина, по которой связку
+  нельзя угадывать по имени файла). Пропущенные листы перечислены в
+  `pages_skipped_as_graphics` в `issues_candidates.json`/`nets.json` и в статистике
+  манифеста — молча пропущенный лист читался бы как «здесь ничего не найдено».
+  Итог на Енисее: **478 с → 86 с**, находки те же 18.
+- `netlist` → `netlist_to_json.py`. **Под типом живут ТРИ разные таблицы**
+  (`detect_table_kind` по заголовкам первого листа → `table_kind` в
+  connections.json/манифесте): ГОСТ-таблица подключений (жёсткий шаблон COL_BOUNDS),
+  «Перечень входных/выходных сигналов» ПЛК и «Кабельный журнал». Два последних режет из
+  альбома `TITLE_TO_TYPE`, и ГОСТ-шаблон на них давал НОЛЬ строк при статусе ok — на АТХ
+  так молчали все три нетлиста. Их колонки берутся из линовки + заголовков (как у
+  спецификации в PDF); низ шапки считается ТОЛЬКО по верхней десятой листа — по верхней
+  четверти в него попадали первые строки данных, и каждый перечень начинался с 1DO5
+  вместо 1DO1. `netlist_rules.RULES_BY_KIND` включает для каждого вида только осмысленные
+  правила (у перечня и журнала нет клеммников ПО ПОСТРОЕНИЮ — «не указана точка
+  подключения» стреляла бы на каждой строке); для них добавлены точные дубль-правила
+  (канал ПЛК / обозначение кабеля), замер: 177+280 каналов и 153 кабеля КОС — 0 ложных.
 - `assembly` → `assembly_drawing_to_data.py` (labels only — **never** `get_drawings()`:
   one sheet holds up to 440k vector primitives and none of it helps find documentation
   errors. The PDF groups each element's label into one text block with the designator in
@@ -297,6 +365,21 @@ exposing `extract_to_dir(path, out_dir) -> (files, stats)`:
   — мусором в главном ключе сверки. Строки якорятся на колонке «Количество»: линовка даёт
   23 горизонтальные линейки на ~25 строк, а просвет по вертикали (шаг 23–30 px против
   высоты строки 14) не отличает соседнюю строку от переноса внутри ячейки.
+
+  **Строка нумерации колонок «1 2 3 …» необязательна.** Она была воротами листа — и все
+  12 листов обеих спецификаций АТХ молча парсились в 0 строк при статусе ok, а сверка
+  связки честно выдала 16 ложных «не заказано» из 17 находок по пустой спецификации.
+  Без неё шапка ищется по самим заголовкам («Поз.»/«Кол.» — сокращения в
+  `COLUMN_PATTERNS`), низ шапки дотягивается поглощением строк-переносов («Код обору-» /
+  «дования» / «материала» — иначе обрывки уезжали в ячейки первой строки данных).
+  Верх данных при живой строке нумерации — её низ, НЕ «20% высоты листа»: у АТХ данные
+  начинаются на 13%, и старая эвристика съедала первые 3–4 строки каждого листа (ЭОМ
+  «базлайн 837 строк» был занижен ровно этим — теперь 873). Диапазон позиций через
+  дефис С ПРОБЕЛАМИ (`1K1 - 1K24`) — диапазон (`RANGE_SEP_RE`); склейка переносов в
+  `_join_fragments` жуёт дефис только после БУКВЫ, иначе перенесённый диапазон
+  («1KL1 -» / «1KL12») терял разделитель и десять промежуточных реле «не были заказаны».
+  Контроль правильности раскрытия бесплатный: у реле строка «1K1 - 1K24, 2K1 - …»
+  развернулась ровно в 246 обозначений при количестве 246.
 
 **Layout profiles** (`data/base_analysis_scripts/profiles.py`): formatting rules (regexes)
 are factored per design-bureau template and auto-detected on load (profiles `A`–`D`:
@@ -358,17 +441,31 @@ errors vanish from the report.
 **`fragment.py`** — the crop of the drawing behind the "фрагмент" button. It finds the
 spot by **searching the source PDF for the finding's key**, not by coordinates: a ref
 locates things in domain fields on purpose, since findings come from checkers *and* from
-the model, and the model has no coordinates at all. Three things there are load-bearing:
-keys are tried specific→general (article → designator → marking → kks → terminal block,
-and the terminal block goes in **without** the pin, because `1XT5:3` is drawn as split
-fragments and never matches whole); the sheet named in the finding is only the *first*
-candidate, and when the key isn't there the response must say which sheet was actually
-rendered (`X-Fragment-Page` / `X-Fragment-Fallback`) — on "element missing from its peer
-sheet" the absence *is* the finding, and silently showing another sheet reads as a
-refutation of it; and pages arrive with `/Rotate 270`, so `search_for` returns
-**un-rotated** coordinates — clip via `rotation_matrix`, draw with the raw rect. Getting
-that wrong crashed the render on some sheets and, worse, silently framed the wrong region
-on others.
+the model, and the model has no coordinates at all. Load-bearing details:
+
+* keys are tried specific→general (article → designator → marking → kks → terminal
+  block, the terminal block **without** the pin, because `1XT5:3` is drawn as split
+  fragments and never matches whole);
+* **the winner is the best key, not the first one that hits.** The "article" on an
+  assembly drawing is regularly junk — a voltage (`230VAC`) or an IEC pin label — and
+  such a key matches hundreds of times, pointing nowhere. A key hitting more than
+  `MAX_HITS_USEFUL` times is skipped in favour of the next; if all are like that, the
+  least frequent wins;
+* **never draw into the page.** `page.draw_rect` writes into the content stream, and on
+  a general-view drawing that stream holds 776k primitives — 0.33 s *per rectangle*.
+  With 296 hits of `230VAC` that was 99 s for one request and the server looked hung.
+  Highlights are painted on the finished pixmap (`_outline`), which costs the same
+  regardless of sheet complexity. A pixmap made with `clip` does **not** start at (0,0)
+  — it carries `pix.x/pix.y` (5609, 1882 on that sheet), and `set_rect` silently returns
+  `False` for a rect outside it, which is exactly how the boxes once vanished while the
+  crop itself stayed correct;
+* the sheet named in the finding is only the *first* candidate, and when the key isn't
+  there the response must say which sheet was actually rendered (`X-Fragment-Page` /
+  `X-Fragment-Fallback`) — on "element missing from its peer sheet" the absence *is* the
+  finding, and silently showing another sheet reads as a refutation of it;
+* pages arrive with `/Rotate 270`, so `search_for` returns **un-rotated** coordinates —
+  clip via `rotation_matrix`, draw with the raw rect. Getting that wrong crashed the
+  render on some sheets and, worse, silently framed the wrong region on others.
 
 **`report_pdf.py`** — the report as one PDF, which is what gets emailed and filed. It
 opens with a **description of the analysis** — documents, bundles, what was checked and
@@ -412,9 +509,25 @@ deliberately absent, and `REVIEW` findings are questions, not assertions.
 **Ход разбора виден пользователю** (`data/base_analysis_scripts/progress.py`): парсеры
 печатают в stdout строки `@@PROGRESS {...}`, воркер их разбирает, в лог НЕ кладёт (на
 альбоме их триста) и складывает в `session.json` → интерфейс показывает «документ 15 из
-30 · чтение схемы · лист 22 из 26». Для стадии ИИ такого показателя нет и быть не может:
-агент сам решает, какой файл открыть и в каком порядке, и рисовать ему прогресс-бар
-значило бы врать.
+30 · чтение схемы · лист 22 из 26», а разбираемый документ подсвечивается в списке
+файлов. Для стадии ИИ такого показателя нет и быть не может: агент сам решает, какой
+файл открыть и в каком порядке, и рисовать ему прогресс-бар значило бы врать.
+
+**Прогресс надо звать из тех циклов, где реально идёт время.** Первая версия сообщала о
+листах только при чтении PDF, а чтение — десятая часть разбора схемы (на 70-листовом
+документе Енисея 1,5 с из 19). Остальное считалось молча, счётчик стоял на последнем
+листе, и выглядело это как «прогресс всегда показывает последнюю страницу»; вдобавок
+схему читают ДВА парсера подряд, поэтому счётчик успевал сбегать 1→N дважды — отсюда
+«иногда почему-то первая». Сейчас о листах сообщают `extract_raw` (у второго прохода
+своя подпись «повторное чтение схемы»), `build_graph` и сборка цепей в
+`schematic_connectivity`. Придержанное троттлингом сообщение **запоминается**, а не
+выбрасывается: иначе терялся последний лист документа и на экране навсегда оставался
+предпоследний.
+
+Подсветка строки в списке идёт по `path` (путь относительно `data/` сессии), а не по
+имени: у альбома в каждой подпапке-шкафу своё «Общий вид». Части альбома создаёт сама
+нарезка уже ВНУТРИ прогона, а список файлов загружен до его начала, поэтому при смене
+разбираемого документа фронтенд перечитывает список, если такого пути в нём ещё нет.
 
 **Изоляция сессий сделана путями, а не правками пайплайна.** `_pipeline_runner.py`
 собирает `config.yaml` сессии — копию базового, где весь раздел `paths` заменён на
@@ -456,6 +569,17 @@ args-файлом), а не потоком — только так отмена 
 их процесс умер вместе с прежним сервером. Автоматически они НЕ перезапускаются —
 пользователь мог перезапустить сервер именно ради остановки прогона; `queued` при этом
 возвращаются в очередь в порядке `queued_at`.
+
+**Уведомление о завершении — ЛЮБОЙ сессии, не только открытой** (`startFinishWatcher`
+в `app.js`, V1.6). Открытая сессия и список поллятся своими таймерами, но оба живут
+только на своём экране; наблюдатель же работает всегда: раз в 3 с сравнивает статусы
+всех сессий с прошлым тиком и на переходе «queued/running → финал» показывает тост в
+углу (клик открывает сессию) и системное Notification — последнее ТОЛЬКО когда вкладка
+не в фокусе (смотрящему на страницу хватает тоста). Разрешение на Notification
+спрашивается в момент запуска анализа (`enqueue`): браузер не даст спросить без клика,
+и именно тогда уведомление становится нужным. Первый тик наблюдателя только запоминает
+статусы: сессии, завершившиеся до открытия вкладки, — не новость. Серверной части у
+механизма нет — только опрос `/api/sessions`.
 
 **`has_files` считает и `full_projects`, не только `base_files`.** Иначе повторный запуск
 сессии с альбомом был невозможен, а выглядело это как «файл не найден»: альбом

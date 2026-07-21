@@ -17,6 +17,7 @@ let DOC_TYPES = [];          // список принимаемых типов (
 let S = { id: null, meta: null, files: [], logNext: 0 };
 let sessionTimer = null;     // поллинг открытой сессии
 let listTimer = null;        // автообновление списка сессий
+let watchTimer = null;       // глобальный наблюдатель завершения (все сессии)
 
 const STATUS_LABELS = {
   draft: "черновик", queued: "в очереди", running: "выполняется",
@@ -40,7 +41,98 @@ async function init() {
   }
   bindEvents();
   window.addEventListener("hashchange", route);
+  startFinishWatcher();
   await route();
+}
+
+// ------------------------------------------------------------
+// Уведомления о завершении анализа - ЛЮБОЙ сессии, не только открытой.
+//
+// Прогон живёт на сервере, и вкладка про него ничего не знает, пока не
+// спросит. Открытая сессия поллится своим таймером, список - своим, но оба
+// живут только на своём экране. Этот наблюдатель работает ВСЕГДА: раз в
+// несколько секунд сравнивает статусы всех сессий с прошлым разом и, увидев
+// переход "считалась -> завершилась", показывает тост в углу и системное
+// уведомление (если вкладка не в фокусе). Так можно уйти в другую сессию или
+// свернуть браузер и всё равно узнать, что чужой сорокаминутный прогон готов.
+// ------------------------------------------------------------
+
+const FINISHED = { done: 1, error: 1, cancelled: 1, interrupted: 1 };
+let watchedStatuses = null;   // id -> статус на прошлом тике (null = первый тик)
+
+function startFinishWatcher() {
+  if (watchTimer) clearInterval(watchTimer);
+  watchTimer = setInterval(async () => {
+    let data;
+    try { data = await fetchJSON("/api/sessions"); }
+    catch { return; }
+    const now = new Map();
+    for (const s of data.sessions || []) now.set(s.id, s);
+
+    // Первый тик - только запомнить: сессии, завершившиеся до открытия
+    // вкладки, новостью не являются.
+    if (watchedStatuses !== null) {
+      for (const [id, s] of now) {
+        const was = watchedStatuses.get(id);
+        const active = was === "queued" || was === "running";
+        if (active && FINISHED[s.status]) notifyFinished(s);
+      }
+    }
+    watchedStatuses = new Map([...now].map(([id, s]) => [id, s.status]));
+  }, 3000);
+}
+
+function notifyFinished(s) {
+  const what = {
+    done: s.n_findings != null ? `завершён. Замечаний: ${s.n_findings}` : "завершён",
+    error: "завершился с ошибкой",
+    cancelled: "отменён",
+    interrupted: "прерван перезапуском сервера",
+  }[s.status] || "завершён";
+  const text = `Анализ «${s.name}» ${what}`;
+  const kind = s.status === "done" ? "ok" : "err";
+  showToast(text, kind, s.id);
+
+  // Системное уведомление - только когда вкладка не на глазах: смотрящему на
+  // страницу хватает тоста, а дублировать его баннером поверх других окон незачем.
+  if ("Notification" in window && Notification.permission === "granted"
+      && !document.hasFocus()) {
+    const n = new Notification("Анализатор документации", { body: text });
+    n.onclick = () => {
+      window.focus();
+      location.hash = "#/s/" + encodeURIComponent(s.id);
+      n.close();
+    };
+  }
+}
+
+// Разрешение на системные уведомления спрашивается в момент запуска анализа:
+// это клик пользователя (браузер не даст спросить без него), и именно тогда
+// уведомление становится нужным - прогон долгий, вкладку закроют.
+function askNotifyPermission() {
+  if ("Notification" in window && Notification.permission === "default") {
+    try { Notification.requestPermission(); } catch { /* старый браузер */ }
+  }
+}
+
+function showToast(text, kind, sessionId) {
+  let host = $("toast-host");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "toast-host";
+    document.body.appendChild(host);
+  }
+  const t = document.createElement("div");
+  t.className = "toast toast-" + (kind || "ok");
+  t.textContent = text;
+  t.title = "Открыть сессию";
+  t.addEventListener("click", () => {
+    location.hash = "#/s/" + encodeURIComponent(sessionId);
+    t.remove();
+  });
+  host.appendChild(t);
+  setTimeout(() => { t.classList.add("gone"); }, 8000);
+  setTimeout(() => t.remove(), 8600);
 }
 
 async function route() {
@@ -240,6 +332,12 @@ function isBusy() {
   return S.meta && (S.meta.status === "queued" || S.meta.status === "running");
 }
 
+// Путь документа, который скрипты разбирают прямо сейчас (null - никакой).
+function currentDocPath() {
+  if (!S.meta || S.meta.status !== "running") return null;
+  return (S.meta.progress || {}).path || null;
+}
+
 // Что именно считается прямо сейчас: стадия и, для скриптов, текущий лист.
 // Для стадии ИИ листа нет и быть не может - агент сам решает, какой файл
 // открыть и в каком порядке, и рисовать ему прогресс-бар значило бы врать.
@@ -311,6 +409,7 @@ function startSessionPolling() {
     const data = await pumpLog();
     if (!data) return;
     const wasStatus = S.meta.status;
+    const wasDoc = currentDocPath();
     Object.assign(S.meta, {
       status: data.status, error: data.error,
       n_findings: data.n_findings, queue_position: data.queue_position,
@@ -321,9 +420,25 @@ function startSessionPolling() {
         "<span ", '<span id="crumb-status" ');
     }
     renderSessionStatus();
+    // Список файлов трогаем, только когда сменился разбираемый документ: раз в
+    // секунду перестраивать его целиком незачем, а на альбоме в нём полсотни
+    // строк с выпадающими списками.
+    const doc = currentDocPath();
+    if (doc !== wasDoc) {
+      // Документа может не быть в списке вовсе: части альбома создаёт сама
+      // нарезка, уже ВНУТРИ прогона, а список загружен до его начала (и
+      // перед каждым прогоном прошлая нарезка стирается). Тогда список надо
+      // перечитать с сервера, иначе подсвечивать нечего - и пользователь
+      // вдобавок не видит, на что вообще разрезали его альбом.
+      if (doc && !S.files.some((f) => f.path === doc)) await loadSession();
+      else renderFiles();
+    }
     if (!isBusy()) {
       clearInterval(sessionTimer);
       sessionTimer = null;
+      // перечитываем целиком: за прогон появились части альбома, а подсветку
+      // и блокировку управления надо снять
+      try { await loadSession(); } catch { renderFiles(); }
       if (data.status === "done") await showReport();
     }
   }, 1000);
@@ -363,16 +478,21 @@ function renderFiles() {
     const gen = f.generated
       ? `<span class="fi-gen" title="Этот документ вырезан из загруженного альбома. Удалять по одному не нужно — при следующем запуске альбом будет нарезан заново">из альбома</span>`
       : "";
+    // Документ, который скрипты разбирают прямо сейчас. Сверяем по пути, а не
+    // по имени: в альбоме у каждого шкафа своё «Общий вид», и по имени
+    // подсветилось бы сразу несколько строк.
+    const active = currentDocPath() === f.path;
+    const activeTag = active ? `<span class="fi-active" title="Этот документ анализируется прямо сейчас">разбирается</span>` : "";
     // Имя - ссылка: открыть исходный документ в соседней вкладке. Это первое,
     // что делает инженер, увидев замечание, и раньше ради этого приходилось
     // искать файл в проводнике.
     const href = `/api/sessions/${encodeURIComponent(S.id)}/file?path=${encodeURIComponent(f.path)}`;
     return `
-      <li class="file-item">
+      <li class="file-item${active ? " analyzing" : ""}">
         <span class="fi-icon">▤</span>
         <a class="fi-name" href="${href}" target="_blank" rel="noopener"
            title="Открыть «${esc(f.name)}» в новой вкладке">${esc(f.name)}</a>
-        ${bundle}${gen}
+        ${activeTag}${bundle}${gen}
         <span class="fi-size">${fmtSize(f.size)}</span>
         <select data-idx="${i}" class="${f.type ? "" : "unset"}" ${locked ? "disabled" : ""}>${opts}</select>
         <button class="fi-del" data-del="${i}" title="Удалить файл из сессии"
@@ -470,6 +590,7 @@ function updateRunEnabled() {
 // ------------------------------------------------------------
 async function enqueue(mode) {
   closeRunMenu();
+  askNotifyPermission();
   $("report-section").classList.remove("show");
   logLine(`--- Сессия ставится в очередь (режим: ${mode === "scripts" ? "без ИИ" : "полный"}) ---`, "ok");
   try {

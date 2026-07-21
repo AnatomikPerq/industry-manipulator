@@ -351,6 +351,26 @@ def _lend_project_wide_docs(groups: dict) -> None:
                     bundle, common["spec"]["name"])
 
 
+def _doc_quality(doc_type: str, stats: dict) -> tuple:
+    """Сколько полезного извлечено из документа - ключ выбора ГЛАВНОГО документа
+    типа внутри связки (см. run_bundle_stage). Метрики берутся из статистики
+    манифеста, самые говорящие - первыми: у принципиальной схемы всегда больше
+    привязанных клемм, чем у однолинейной или схемы внешних соединений, у
+    полного чертежа больше уникальных обозначений, чем у листа-продолжения."""
+    if doc_type == "scheme":
+        return (stats.get("terminals_on_scheme") or 0,
+                stats.get("wire_markings_on_scheme") or 0,
+                stats.get("nets") or 0)
+    if doc_type == "assembly":
+        return (stats.get("assembly_unique_designators") or 0,
+                stats.get("assembly_elements") or 0)
+    if doc_type == "spec":
+        return (stats.get("spec_rows") or 0,)
+    if doc_type == "netlist":
+        return (stats.get("total_connections") or 0,)
+    return (0,)
+
+
 def run_bundle_stage(cfg: dict, data_dir: Path) -> list:
     """Стадия СВЯЗОК: детерминированная сверка документов ОДНОГО шкафа между собой.
 
@@ -378,9 +398,15 @@ def run_bundle_stage(cfg: dict, data_dir: Path) -> list:
         logger.error("Чекер связок не загрузился: %s", e)
         return []
 
-    # {связка: {тип документа: сведения}}. Если в одной связке ДВА документа
-    # одного типа (две схемы на шкаф), берём первый и говорим об этом вслух:
-    # молча потерять второй хуже, чем предупредить.
+    # {связка: {тип документа: сведения}}. Документов одного типа в связке
+    # бывает НЕСКОЛЬКО - в альбоме у шкафа рядом лежат принципиальная,
+    # однолинейная и схема внешних соединений, а чертёж разбит на "Общий вид" и
+    # "Вид спереди". Раньше для сверки молча брался первый по списку - и им
+    # оказывалась схема внешних соединений (сортировка!), у которой почти нет
+    # обозначений приборов: сверка «нарисовано, но не заказано» на альбоме
+    # тихо вырождалась. Теперь главным выбирается документ с самыми полными
+    # данными (_doc_quality), остальные передаются чекеру связки в "extra" -
+    # он объединяет их обозначения с главным (см. bundle_rules.check_bundle).
     groups = {}
     for doc in documents:
         if doc.get("status") == "failed":
@@ -388,16 +414,33 @@ def run_bundle_stage(cfg: dict, data_dir: Path) -> list:
         bundle = doc.get("bundle") or "без связки"
         slot = groups.setdefault(bundle, {})
         dtype = doc.get("doc_type")
-        if dtype in slot:
-            logger.warning("Связка %r: документов типа %r больше одного (%s и %s) - "
-                           "для сверки взят первый", bundle, dtype,
-                           slot[dtype]["name"], doc.get("name"))
-            continue
-        slot[dtype] = {
+        slot.setdefault(dtype, []).append({
             "name": doc["name"],
             "data_dir": str(PROJECT_ROOT / doc["data_dir"]),
             "source": doc.get("source_file"),
-        }
+            "stats": doc.get("stats") or {},
+        })
+
+    for bundle, slot in groups.items():
+        for dtype, candidates in slot.items():
+            candidates.sort(key=lambda d: _doc_quality(dtype, d["stats"]),
+                            reverse=True)
+            primary = candidates[0]
+            if len(candidates) > 1:
+                primary["extra"] = candidates[1:]
+                logger.info("Связка %r: документов типа %r несколько - главный для "
+                            "сверки %s, обозначения остальных (%s) объединяются с ним",
+                            bundle, dtype, primary["name"],
+                            ", ".join(d["name"] for d in candidates[1:]))
+            # Документ, извлечённый ПУСТЫМ, - это провал парсера, а не пустой
+            # шкаф. Пускать его в сверку нельзя: пустая спецификация читается
+            # правилами как «ничего не заказано» и на КОС дала 16 ложных
+            # "изделие не заказано" из 17 находок. Чекер связки перепроверяет
+            # то же сам (check_bundle), здесь - предупреждение в лог.
+            if not any(_doc_quality(dtype, primary["stats"])):
+                logger.warning("Связка %r: %s извлёкся пустым - в сверке связки "
+                               "он участвовать не будет", bundle, primary["name"])
+            slot[dtype] = primary
 
     _lend_project_wide_docs(groups)
 

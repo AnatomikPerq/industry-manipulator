@@ -8,6 +8,7 @@ python3 pdf_to_json.py input.pdf output.json [--meta meta.json] [--revisions rev
 """
 
 import os
+import re
 import sys
 import json
 import argparse
@@ -93,6 +94,265 @@ def extract_pdf_to_dicts(pdf_path):
                     row_dict["Лист"] = str(page_num)  # Добавляем номер страницы
                     all_rows.append(row_dict)
     return all_rows
+
+
+# =========================================================================
+# БЛОК 1а: ДРУГИЕ ВИДЫ ТАБЛИЦ ТИПА "НЕТЛИСТ"
+#
+# Нарезка полного проекта отдаёт этому парсеру не только ГОСТ-таблицу
+# подключений, но и «Перечень входных/выходных сигналов» и «Кабельный журнал»
+# (см. TITLE_TO_TYPE в full_project.py). Это ДРУГИЕ таблицы: у перечня сигналов
+# колонки "№ п/п / Обозначение / Адрес PLC / Тип / Описание", у журнала -
+# "Обозначение кабеля / Начало / Конец / Марка / сечение / длина". Жёсткие
+# COL_BOUNDS ГОСТ-шаблона на них дают НОЛЬ строк, и до этого блока все три
+# документа АТХ молча извлекались пустыми (total_connections: 0 при статусе ok).
+#
+# Раскладка узнаётся по заголовкам первого листа, колонки берутся из линовки
+# (суммарная длина вертикальных отрезков по X - тот же приём, что в
+# specification_pdf_to_json.py, и по той же причине: длинных вертикалей нет,
+# границы нарисованы по-ячеечно). Выход - те же connections.json записи;
+# что за таблица была - в metadata.table_kind, и правила netlist_rules
+# применяются только те, что осмыслены для этого вида (см. check_connections_file).
+# =========================================================================
+
+def _norm_ws(s):
+    return " ".join(str(s or "").split()).lower()
+
+
+def _page_words(page):
+    return [
+        {"text": fix_text(w["text"]), "x0": w["x0"], "x1": w["x1"],
+         "top": w["top"], "bottom": w["bottom"], "xc": (w["x0"] + w["x1"]) / 2}
+        for w in page.extract_words(use_text_flow=False, keep_blank_chars=False)
+    ]
+
+
+def detect_table_kind(pdf_path):
+    """"gost_connections" | "signal_list" | "cable_journal" - по заголовкам
+    первого листа. ГОСТ-таблица отдаётся штатному извлечению."""
+    with pdfplumber.open(pdf_path) as pdf:
+        if not pdf.pages:
+            return "gost_connections"
+        page = pdf.pages[0]
+        head = _norm_ws(" ".join(w["text"] for w in _page_words(page)
+                                 if w["top"] < page.height * 0.25))
+    if "описание сигнала" in head and (
+            "адрес plc" in head or "номер входа" in head or "номер выхода" in head):
+        return "signal_list"
+    if "кабел" in head and "начало" in head and "конец" in head:
+        return "cable_journal"
+    return "gost_connections"
+
+
+def _vertical_separators(page, min_share=0.35):
+    """Границы колонок по линовке: X, набравшие достаточную суммарную длину
+    вертикальных отрезков. Поля листа (x < 50) отбрасываются - там рамка
+    формата и вертикальные надписи «Инв. № подл.»."""
+    from collections import defaultdict
+    acc = defaultdict(float)
+    for l in page.lines:
+        if abs(l["x0"] - l["x1"]) < 1.0 and abs(l["top"] - l["bottom"]) >= 5:
+            acc[round(l["x0"])] += abs(l["top"] - l["bottom"])
+    for r in page.rects:
+        if r["width"] < 2.5 and r["height"] >= 5:
+            acc[round(r["x0"])] += r["height"]
+    if not acc:
+        return []
+    strong = max(acc.values())
+    seps, merged = sorted(x for x, v in acc.items()
+                          if v >= strong * min_share and x >= 50), []
+    for x in seps:
+        if merged and x - merged[-1] <= 3:
+            continue
+        merged.append(x)
+    return merged
+
+
+def _row_bands(page, min_width, gap_lo=8, gap_hi=45):
+    """Полосы строк таблицы между соседними горизонтальными линейками.
+
+    В отличие от data_row_bands ГОСТ-шаблона, ширина линейки - параметр
+    (перечень сигналов набран на A4, его линейки короче 500), а полосы штампа
+    внизу листа отсеиваются не по скачку шага, а содержимым ячеек в вызывающем
+    коде (в колонке обозначения у штампа пусто)."""
+    ys = sorted(set(round(l["top"], 1) for l in page.lines
+                    if abs(l["top"] - l["bottom"]) < 1.0
+                    and abs(l["x0"] - l["x1"]) >= min_width))
+    return [(a, b) for a, b in zip(ys, ys[1:]) if gap_lo <= b - a <= gap_hi]
+
+
+def _cells(words, seps, page_width, top, bottom):
+    """Тексты ячеек полосы, по границам колонок (центр слова решает)."""
+    edges = [0.0] + [float(x) for x in seps] + [float(page_width)]
+    row = [w for w in words if top - 0.5 <= w["top"] < bottom - 0.5]
+    out = []
+    for lo, hi in zip(edges, edges[1:]):
+        cell = sorted((w for w in row if lo <= w["xc"] < hi),
+                      key=lambda w: (round(w["top"]), w["x0"]))
+        out.append(" ".join(w["text"] for w in cell).strip())
+    return out
+
+
+def _map_alt_columns(words, seps, page_width, page_height, patterns):
+    """{поле: индекс колонки} по заголовкам над таблицей + низ шапки.
+
+    Для СОПОСТАВЛЕНИЯ заголовков берётся верхняя четверть листа (шапки бывают
+    глубокими), а вот низ шапки считается ТОЛЬКО по верхней десятой: в четверть
+    листа уже попадают первые строки данных, и низ, посчитанный по ним, съедал
+    первые четыре канала каждого перечня (замерено: перечень выходных сигналов
+    начинался с 1DO5)."""
+    edges = [0.0] + [float(x) for x in seps] + [float(page_width)]
+    header_words = [w for w in words if w["top"] < page_height * 0.25]
+    header_bottom = 0.0
+    mapping = {}
+    for i, (lo, hi) in enumerate(zip(edges, edges[1:])):
+        col_words = [w for w in header_words if lo <= w["xc"] < hi]
+        title = _norm_ws(" ".join(
+            w["text"] for w in sorted(col_words, key=lambda w: (w["top"], w["x0"]))))
+        if not title:
+            continue
+        for field, pats in patterns:
+            if field in mapping:
+                continue
+            if any(p in title for p in pats):
+                mapping[field] = i
+                header_bottom = max(
+                    [header_bottom] + [w["bottom"] for w in col_words
+                                       if w["top"] < page_height * 0.10])
+                break
+    return mapping, header_bottom
+
+
+# Содержимое штампа, просочившееся в полосу строки: подписи граф («Дата»,
+# «Подп.», «Копировал») и голые даты «04.25». Такая "запись" - не канал и не
+# кабель, отбрасываем по значению ключевой ячейки.
+_ALT_JUNK_RE = re.compile(
+    r"^(изм|лист|№\s*док|подп|дата|формат|копировал|стадия|"
+    r"разраб|провер|н\.\s*контр|утв|соглас|гип|гап)(?![а-яёa-z])"
+    r"|^[\d.,/\s-]+$", re.I)
+
+
+def _alt_record(rec_id, page_no, **fields):
+    rec = {"id": rec_id, "page": page_no}
+    for key in FIELD_ORDER:
+        rec[key] = None
+    rec["terminal_address"] = None
+    rec.update(fields)
+    return rec
+
+
+SIGNAL_COLUMNS = [
+    ("kks",                  ["обозначение"]),
+    ("connection_address",   ["адрес plc", "номер входа", "номер выхода", "адрес"]),
+    ("terminal_type_or_ref", ["тип"]),
+    ("note",                 ["описание"]),
+]
+
+JOURNAL_COLUMNS = [
+    ("cable",   ["обозначение"]),
+    ("from",    ["начало"]),
+    ("to",      ["конец"]),
+    ("segment", ["участок"]),
+    ("brand",   ["марка"]),
+    ("section", ["сечение", "количество кабелей"]),
+    ("length",  ["длина"]),
+]
+
+
+def extract_signal_list(pdf_path):
+    """«Перечень входных/выходных сигналов»: № п/п, обозначение сигнала,
+    адрес канала ПЛК (1DI1/1DO1), тип данных, описание. Подзаголовки разделов
+    («Дискретные сигналы») запоминаются в поле section."""
+    connections, section = [], None
+    with pdfplumber.open(pdf_path) as pdf:
+        seps = mapping = None
+        for page_no, page in enumerate(pdf.pages, start=1):
+            _progress.page(page_no, len(pdf.pages), stage="чтение перечня сигналов")
+            words = _page_words(page)
+            page_seps = _vertical_separators(page)
+            if page_seps:
+                m, header_bottom = _map_alt_columns(
+                    words, page_seps, page.width, page.height, SIGNAL_COLUMNS)
+                if "connection_address" in m:
+                    seps, mapping = page_seps, m
+                else:
+                    header_bottom = 40.0
+            else:
+                header_bottom = 40.0
+            if not seps or not mapping:
+                continue
+            for top, bottom in _row_bands(page, min_width=250):
+                if bottom <= header_bottom + 2:
+                    continue
+                cells = _cells(words, seps, page.width, top, bottom)
+                get = lambda f: (cells[mapping[f]] if f in mapping
+                                 and mapping[f] < len(cells) else "")  # noqa: E731
+                addr = clean(get("connection_address"))
+                tag = clean(get("kks"))
+                if not addr and not tag:
+                    continue
+                if addr and _ALT_JUNK_RE.match(addr):
+                    continue        # графы штампа/даты, попавшие в полосу
+                if not addr and tag:
+                    if _ALT_JUNK_RE.match(tag):
+                        continue
+                    # строка-подзаголовок раздела («Дискретные сигналы»)
+                    if not any(ch.isdigit() for ch in tag):
+                        section = tag
+                        continue
+                connections.append(_alt_record(
+                    len(connections) + 1, page_no,
+                    kks=tag, connection_address=addr,
+                    terminal_type_or_ref=clean(get("terminal_type_or_ref")),
+                    note=clean(get("note")), section=section))
+    return connections
+
+
+def extract_cable_journal(pdf_path):
+    """«Кабельный журнал»: обозначение кабеля, откуда и куда он идёт, марка,
+    сечение и длина по проекту. Поля начала/конца и марки кладутся в
+    отдельные ключи (from_point/to_point/...) - у ГОСТ-таблицы подключений
+    таких понятий нет, и втискивать их в чужие колонки значило бы врать."""
+    connections = []
+    with pdfplumber.open(pdf_path) as pdf:
+        seps = mapping = None
+        for page_no, page in enumerate(pdf.pages, start=1):
+            _progress.page(page_no, len(pdf.pages), stage="чтение кабельного журнала")
+            words = _page_words(page)
+            page_seps = _vertical_separators(page)
+            if page_seps:
+                m, header_bottom = _map_alt_columns(
+                    words, page_seps, page.width, page.height, JOURNAL_COLUMNS)
+                if "cable" in m and ("from" in m or "to" in m):
+                    seps, mapping = page_seps, m
+                else:
+                    header_bottom = 40.0
+            else:
+                header_bottom = 40.0
+            if not seps or not mapping:
+                continue
+            for top, bottom in _row_bands(page, min_width=600):
+                if bottom <= header_bottom + 2:
+                    continue
+                cells = _cells(words, seps, page.width, top, bottom)
+                get = lambda f: (cells[mapping[f]] if f in mapping
+                                 and mapping[f] < len(cells) else "")  # noqa: E731
+                cable = clean(get("cable"))
+                src, dst = clean(get("from")), clean(get("to"))
+                if not cable or (not src and not dst):
+                    continue        # штамп и подзаголовки: обозначения там нет
+                if _ALT_JUNK_RE.match(cable):
+                    continue
+                connections.append(_alt_record(
+                    len(connections) + 1, page_no,
+                    cable_harness=cable,
+                    note=f"{src or '?'} -> {dst or '?'}",
+                    from_point=src, to_point=dst,
+                    segment=clean(get("segment")),
+                    cable_brand=clean(get("brand")),
+                    cable_section=clean(get("section")),
+                    cable_length=clean(get("length"))))
+    return connections
 
 
 # =========================================================================
@@ -260,16 +520,22 @@ def default_metadata():
 
 def build_document(pdf_path, meta_path=None, revisions_path=None):
     """Полное извлечение одного PDF-нетлиста в готовую JSON-структуру (dict)."""
-    rows = extract_pdf_to_dicts(pdf_path)
+    table_kind = detect_table_kind(pdf_path)
 
-    # Колонку страницы добавляет сам extract_pdf_to_dicts
-    page_col = "Лист" if rows and "Лист" in rows[0] else None
-
-    connections = build_connections(rows, page_col)
-    stats = build_statistics(connections, page_col)
+    if table_kind == "signal_list":
+        connections = extract_signal_list(pdf_path)
+    elif table_kind == "cable_journal":
+        connections = extract_cable_journal(pdf_path)
+    else:
+        rows = extract_pdf_to_dicts(pdf_path)
+        connections = build_connections(rows, "Лист" if rows and "Лист" in rows[0]
+                                        else None)
+    stats = build_statistics(connections, True)
+    stats["table_kind"] = table_kind
 
     metadata = default_metadata()
     metadata["source_file"] = str(pdf_path)
+    metadata["table_kind"] = table_kind
 
     if meta_path:
         with open(meta_path, encoding="utf-8") as f:
@@ -283,11 +549,44 @@ def build_document(pdf_path, meta_path=None, revisions_path=None):
         with open(revisions_path, encoding="utf-8") as f:
             revision_history = json.load(f)
 
+    legend = build_column_legend(stats)
+    if table_kind == "signal_list":
+        legend["connection_address"] = {
+            "ru": "Адрес/номер канала ПЛК", "en": "PLC channel address (1DI1, 1DO5...)",
+            "populated": True}
+        legend["section"] = {"ru": "Раздел перечня (Дискретные/Аналоговые сигналы)",
+                             "en": "List section", "populated": True}
+        notes = [
+            "Это ПЕРЕЧЕНЬ СИГНАЛОВ ПЛК, а не таблица подключений: каждая запись - "
+            "один канал контроллера (connection_address), его тип данных "
+            "(terminal_type_or_ref) и назначение (note). Клеммников и штифтов в "
+            "таком документе нет по построению - их пустота не ошибка.",
+            "Полезная сверка: каналы из перечня должны существовать на "
+            "принципиальной схеме (io_channels в graph.json схемы) и наоборот.",
+        ]
+    elif table_kind == "cable_journal":
+        for key, ru in (("from_point", "Начало трассы (откуда идёт кабель)"),
+                        ("to_point", "Конец трассы (куда приходит кабель)"),
+                        ("segment", "Участок трассы"),
+                        ("cable_brand", "Марка кабеля по проекту"),
+                        ("cable_section", "Число и сечение жил"),
+                        ("cable_length", "Длина по проекту")):
+            legend[key] = {"ru": ru, "en": None, "populated": True}
+        notes = [
+            "Это КАБЕЛЬНЫЙ ЖУРНАЛ, а не таблица подключений: каждая запись - один "
+            "кабель (cable_harness), его начало и конец (from_point/to_point), марка "
+            "и сечение. Клеммников, штифтов и KKS здесь нет по построению.",
+            "Полезная сверка: обозначения шкафов в начале/конце трассы против "
+            "комплекта документов; марка и сечение - против однолинейных схем.",
+        ]
+    else:
+        notes = build_domain_notes(stats)
+
     return {
         "document_metadata": metadata,
         "revision_history": revision_history,
-        "column_legend": build_column_legend(stats),
-        "domain_notes_for_analysis": build_domain_notes(stats),
+        "column_legend": legend,
+        "domain_notes_for_analysis": notes,
         "statistics": stats,
         "connections": connections,
     }
@@ -309,6 +608,7 @@ def extract_to_dir(pdf_path, out_dir, meta_path=None, revisions_path=None):
 
     stats = doc["statistics"]
     summary = {
+        "table_kind": stats.get("table_kind", "gost_connections"),
         "total_connections": stats["total_rows"],
         "total_pages": stats["total_pages"],
         "reserve_rows": stats["reserve_rows_count"],

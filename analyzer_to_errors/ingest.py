@@ -388,6 +388,7 @@ def extract_document(doc: dict, scripts_dir: Path, data_dir: Path,
         "files": [],
         "stats": {},
         "errors": [],
+        "warnings": [],
     }
 
     if out_dir.exists() and overwrite:
@@ -404,7 +405,11 @@ def extract_document(doc: dict, scripts_dir: Path, data_dir: Path,
             record["files"].extend(files)
             record["stats"].update(stats)
             logger.info("  [%s] готово: %s", script, stats)
+            # Предупреждения кладутся и в манифест, а не только в лог: агент и
+            # отчёт обязаны видеть «документ извлечён пустым/убого» - иначе
+            # пустота читается как «в документе ничего нет» (см. bundle_rules).
             for msg in _extraction_warnings(script, stats, record["stats"]):
+                record["warnings"].append(msg)
                 logger.warning("  [%s] %s: %s", script, doc["name"], msg)
         except Exception as e:  # noqa: BLE001 - падение парсера не должно ронять весь прогон
             record["errors"].append(f"{script}: {type(e).__name__}: {e}")
@@ -416,10 +421,27 @@ def extract_document(doc: dict, scripts_dir: Path, data_dir: Path,
     # (например, нового, экспериментального) незачем.
     if not record["files"]:
         record["status"] = "failed"
-    elif record["errors"]:
+    elif record["errors"] or _extracted_nothing(doc["doc_type"], record["stats"]):
+        # Пустое извлечение при живом парсере - тоже «частично»: файлы созданы,
+        # но данных в них ноль, и статус «ok» читался бы как «в документе
+        # ничего нет». На АТХ ровно так молчали обе спецификации и все три
+        # нетлиста - при статусе ok у всех пяти.
         record["status"] = "partial"
 
     return record
+
+
+def _extracted_nothing(doc_type: str, stats: dict) -> bool:
+    """Главная метрика типа документа по нулям = извлечение фактически провалено."""
+    if doc_type == "spec":
+        return not stats.get("spec_rows")
+    if doc_type == "netlist":
+        return not stats.get("total_connections")
+    if doc_type == "assembly":
+        return not stats.get("assembly_elements")
+    if doc_type == "scheme":
+        return not stats.get("graph_nodes") and not stats.get("nets")
+    return False
 
 
 def run_extraction(base_files_dir, scripts_dir, data_dir, overrides: dict = None,
@@ -462,7 +484,14 @@ def run_extraction(base_files_dir, scripts_dir, data_dir, overrides: dict = None
             continue
         done += 1
         if _progress:
-            _progress.document(done, len(to_extract), doc["name"], doc["doc_type"])
+            # путь относительно data/ - тем же ключом интерфейс адресует файлы
+            # в списке сессии, по нему он и подсветит считаемый сейчас документ
+            try:
+                rel = doc["source"].relative_to(data_dir).as_posix()
+            except ValueError:
+                rel = None      # base_files вынесен за пределы data - подсветки не будет
+            _progress.document(done, len(to_extract), doc["name"],
+                               doc["doc_type"], path=rel)
         documents.append(extract_document(doc, scripts_dir, data_dir, overwrite))
     if _progress:
         _progress.done()

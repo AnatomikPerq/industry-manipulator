@@ -461,3 +461,47 @@ a.fi-name:hover { color: var(--blue-dark); border-bottom-color: var(--blue); }
   font-size: 11.5px; font-weight: 600; color: var(--orange-dark);
   background: var(--orange-soft); border: 1px solid #f6d4b0; border-radius: 10px;
 }
+
+/* Документ, который скрипты разбирают прямо сейчас. Заливка + полоса слева:
+   на альбоме в списке полсотни строк, и одной рамкой активную не найти. */
+.file-item.analyzing {
+  border-color: var(--blue); background: var(--blue-soft);
+  box-shadow: inset 3px 0 0 var(--blue);
+}
+.file-item .fi-active {
+  flex: none; font-size: 11px; font-weight: 700; letter-spacing: .2px;
+  color: #fff; background: var(--blue); border-radius: 10px; padding: 2px 9px;
+  animation: fi-pulse 1.6s ease-in-out infinite;
+}
+@keyframes fi-pulse { 50% { opacity: .55; } }
+/* Уважаем системную настройку «меньше движения»: мигающая метка в списке
+   документов — не та вещь, ради которой стоит игнорировать эту просьбу. */
+@media (prefers-reduced-motion: reduce) {
+  .file-item .fi-active { animation: none; }
+}
+
+/* ============================================================
+   Тосты о завершении анализа (см. startFinishWatcher в app.js).
+   Живут поверх любого экрана: наблюдатель глобальный, и завершиться
+   может сессия, которая сейчас вообще не открыта.
+   ============================================================ */
+#toast-host {
+  position: fixed; right: 18px; bottom: 18px; z-index: 200;
+  display: flex; flex-direction: column; gap: 10px; max-width: 360px;
+}
+.toast {
+  padding: 12px 16px; border-radius: var(--radius);
+  background: var(--paper); border: 1px solid var(--line);
+  box-shadow: 0 6px 24px rgba(15, 40, 70, .18);
+  font-size: 13px; line-height: 1.45; cursor: pointer;
+  border-left-width: 4px;
+  animation: toast-in .25s ease-out;
+  transition: opacity .5s ease, transform .5s ease;
+}
+.toast-ok  { border-left-color: var(--low); }
+.toast-err { border-left-color: var(--crit); }
+.toast.gone { opacity: 0; transform: translateY(8px); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+@media (prefers-reduced-motion: reduce) {
+  .toast { animation: none; transition: none; }
+}

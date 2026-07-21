@@ -48,7 +48,9 @@ MAX_CLIP = (1500.0, 1100.0)
 TARGET_PX = 1700
 MAX_ZOOM = 6.0
 
-HIGHLIGHT = (0.85, 0.15, 0.10)
+# Цвет обводки. Для set_rect нужен байтовый кортеж (картинка уже растровая),
+# а не доли единицы, как у векторной отрисовки.
+HIGHLIGHT_RGB = (217, 38, 26)
 
 
 class FragmentError(Exception):
@@ -106,8 +108,28 @@ def _pages_to_search(pdf, sheet):
     return order
 
 
+# Сколько раз ключ может встретиться на листе, чтобы фрагмент по нему что-то
+# значил. Обозначение аппарата стоит на листе один-два раза; надпись, найденная
+# сотни раз, - это не обозначение, а подпись напряжения или графа таблицы
+# ("230VAC" на общем виде Енисея встречается 296 раз). Обводить их все
+# бессмысленно: кадр всё равно охватит лишь угол листа, выбранный случайно.
+MAX_HITS_USEFUL = 12
+
+# Сколько рамок вообще рисовать. Даже пройдя фильтр выше, рисовать много рамок
+# нельзя - см. комментарий про стоимость отрисовки в _render.
+MAX_DRAWN = 8
+
+
 def _hits(page, needles):
-    """Первый ключ, давший попадания на этом листе -> его прямоугольники.
+    """Лучший ключ на этом листе -> его прямоугольники.
+
+    ЛУЧШИЙ, А НЕ ПЕРВЫЙ ПОПАВШИЙСЯ. Ключи идут от точного к общему, но «точный»
+    артикул сплошь и рядом оказывается мусором: на сборочных чертежах в графу
+    артикула попадает то напряжение ("230VAC"), то маркировка вывода по МЭК.
+    Такой ключ находится сотнями и не указывает никуда. Поэтому среди ключей,
+    давших разумное число попаданий, берём первый по порядку точности, а
+    «разумное» - не больше MAX_HITS_USEFUL. Если разумных нет вовсе, берём тот,
+    что дал меньше всего попаданий: показать хоть что-то лучше, чем отказать.
 
     ПОВОРОТ ЛИСТА. Схемы приходят страницами с /Rotate 270: mediabox стоит
     портретом 842x1191, а показывается лист альбомом 1191x842. search_for
@@ -124,6 +146,8 @@ def _hits(page, needles):
     показываемую (по ней строится кадр), а неповёрнутая нужна для рисования -
     draw_rect пишет в поток содержимого страницы, то есть до поворота.
     """
+    matrix = page.rotation_matrix
+    fallback = None
     for needle in needles:
         needle = (needle or "").strip()
         if len(needle) < 2:
@@ -132,10 +156,14 @@ def _hits(page, needles):
             rects = page.search_for(needle)
         except Exception:  # noqa: BLE001 - битый лист не повод ронять запрос
             continue
-        if rects:
-            matrix = page.rotation_matrix
-            return needle, [(fitz.Rect(r) * matrix, fitz.Rect(r)) for r in rects]
-    return None, []
+        if not rects:
+            continue
+        pairs = [(fitz.Rect(r) * matrix, fitz.Rect(r)) for r in rects]
+        if len(rects) <= MAX_HITS_USEFUL:
+            return needle, pairs
+        if fallback is None or len(pairs) < len(fallback[1]):
+            fallback = (needle, pairs)
+    return fallback if fallback else (None, [])
 
 
 def _clip_for(shown_rects, page_rect):
@@ -173,6 +201,41 @@ def _clip_for(shown_rects, page_rect):
     if box.is_empty or box.width < 1 or box.height < 1:
         return fitz.Rect(page_rect)     # лучше показать лист целиком, чем ничего
     return box
+
+
+def _outline(pix, boxes, clip, zoom, thickness=3):
+    """Рисует прямоугольные рамки прямо по пикселям готового изображения.
+
+    Координаты boxes - в показываемом пространстве листа; переводим их в
+    пиксели картинки (вычесть начало кадра, умножить на масштаб) и заливаем
+    четыре полоски через pix.set_rect. Никаких зависимостей и никакой работы с
+    содержимым PDF - стоимость зависит только от длины рамки.
+
+    ВАЖНО ПРО НАЧАЛО КООРДИНАТ. Картинка, отрисованная с clip, лежит НЕ в нуле:
+    у неё своё начало (pix.x, pix.y) - для этого чертежа, например, (5609, 1882).
+    set_rect работает в этой системе, а не от левого верхнего угла картинки, и
+    на прямоугольник за её пределами просто возвращает False, ничего не сообщая.
+    Именно так рамки и пропали в первой версии: фрагмент рисовался правильный,
+    но без единой пометки, а найти это можно было только глазами.
+    """
+    ox, oy = pix.x, pix.y
+    for box in boxes[:MAX_DRAWN]:
+        x0 = ox + int((box.x0 - clip.x0) * zoom) - thickness
+        y0 = oy + int((box.y0 - clip.y0) * zoom) - thickness
+        x1 = ox + int((box.x1 - clip.x0) * zoom) + thickness
+        y1 = oy + int((box.y1 - clip.y0) * zoom) + thickness
+        # обрезаем по картинке: попадание могло стоять у самого края кадра
+        x0, y0 = max(x0, ox), max(y0, oy)
+        x1, y1 = min(x1, ox + pix.width), min(y1, oy + pix.height)
+        if x1 - x0 < 2 or y1 - y0 < 2:
+            continue
+        for bar in (
+            fitz.IRect(x0, y0, x1, y0 + thickness),           # верх
+            fitz.IRect(x0, y1 - thickness, x1, y1),           # низ
+            fitz.IRect(x0, y0, x0 + thickness, y1),           # лево
+            fitz.IRect(x1 - thickness, y0, x1, y1),           # право
+        ):
+            pix.set_rect(bar, HIGHLIGHT_RGB)
 
 
 def render(manifest_path, document, sheet=None, needles=()):
@@ -213,16 +276,22 @@ def render(manifest_path, document, sheet=None, needles=()):
         page = pdf[found_page]
         clip = _clip_for([shown for shown, _ in rects], page.rect)
 
-        # Рамки поверх попаданий. Рисуем в документе, ОТКРЫТОМ В ПАМЯТИ, и
-        # никуда его не сохраняем - файл пользователя остаётся нетронутым.
-        # Берём НЕПОВЁРНУТЫЕ координаты: draw_rect пишет в поток содержимого
-        # страницы, а он живёт до применения /Rotate.
-        for shown, raw in rects:
-            if shown.intersects(clip):
-                page.draw_rect(raw + (-2, -2, 2, 2), color=HIGHLIGHT, width=1.4)
-
         zoom = min(MAX_ZOOM, TARGET_PX / max(clip.width, 1.0))
-        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=clip)
+        matrix = fitz.Matrix(zoom, zoom)
+        pix = page.get_pixmap(matrix=matrix, clip=clip)
+
+        # Обводим попадания ПОВЕРХ ГОТОВОЙ КАРТИНКИ, а не в самой странице.
+        #
+        # Раньше здесь стоял page.draw_rect. Он пишет в поток содержимого
+        # страницы, а на общем виде шкафа этот поток - 776 тысяч векторных
+        # примитивов, и каждая рамка обходится в 0,33 с. На чертеже Енисея,
+        # где ключ '230VAC' находился 296 раз, это давало 99 секунд на один
+        # запрос: сервер выглядел зависшим. Отрисовка по пикселям стоит
+        # столько же, сколько сама рамка, и от сложности листа не зависит
+        # вовсе. Побочная выгода - страница остаётся нетронутой, и незачем
+        # надеяться, что документ в памяти никто не сохранит.
+        _outline(pix, [shown for shown, _ in rects if shown.intersects(clip)],
+                 clip, zoom)
 
         try:
             requested = int(str(sheet).strip())

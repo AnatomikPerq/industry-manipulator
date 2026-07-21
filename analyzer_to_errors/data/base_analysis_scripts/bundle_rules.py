@@ -152,6 +152,29 @@ _ARTICLE_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9./\-]{4,}|[A-Za-z0-9./\-]{5,}
 IEC_TERMINAL_RE = re.compile(
     r"^(?:\d{1,2}/[LT]\d|[LT]\d|A[12]|N|PE|PEN|\d{1,2}(?:NO|NC))$", re.I)
 
+# Номинал напряжения ('230VAC', '24VDC', '~230В') - подпись характеристики на
+# картинке изделия, а не артикул. Цифры в нём есть, и фильтр цифры его
+# пропускает - отсекаем по форме.
+VOLTAGE_RE = re.compile(r"^~?\d{1,4}\s*(?:V|В|B)\s*(?:AC|DC)?$", re.I)
+
+# Подпись, спаренная с ПОДОЗРИТЕЛЬНО МНОГИМИ обозначениями, - не артикул.
+# Настоящий артикул стоит у одного изделия или у небольшой группы одинаковых
+# (замер: на ША1/ШУ-ТМ/ЩСКЗ максимум - 19 обозначений у одного артикула клемм),
+# а вот надпись '230VAC' на типовой картинке реле спарена на КОС с 630
+# обозначениями - и до этого фильтра давала 320 ложных «разный артикул» из 322.
+MASS_CAPTION_MIN_DESIGNATORS = 25
+
+
+def _caption_articles(asm):
+    """Артикулы чертежа, которые на деле - типовые подписи на картинках
+    (спарены с массой разных обозначений)."""
+    by_article = defaultdict(set)
+    for e in asm["elements"]:
+        if e.get("pair_source") == "block" and e.get("article"):
+            by_article[e["article"]].add(norm_designator(e.get("designator")))
+    return {a for a, des in by_article.items()
+            if len(des) >= MASS_CAPTION_MIN_DESIGNATORS}
+
 
 def article_tokens(*texts):
     """Множество артикулоподобных токенов из произвольных текстов."""
@@ -220,6 +243,22 @@ def load_assembly(data_dir):
     }
 
 
+def _doc_entries(docs, dtype):
+    """Главный документ типа + документы того же типа из "extra".
+
+    В связке-альбоме у шкафа несколько схем (принципиальная + однолинейная +
+    внешних соединений) и несколько частей чертежа ("Общий вид" + "Вид
+    спереди"). Сверка обязана видеть обозначения ИЗ ВСЕХ: изделие, подписанное
+    только на однолинейной, - всё равно нарисованное изделие. Главный документ
+    идёт первым: при совпадении обозначений в нескольких документах ссылка в
+    находке ведёт на него.
+    """
+    entry = docs.get(dtype)
+    if not entry:
+        return []
+    return [entry] + list(entry.get("extra") or [])
+
+
 def load_scheme(data_dir):
     """Факты со схемы: обозначения приборов, артикулы модулей, весь текст."""
     pages = _load(data_dir, "classified.json")
@@ -256,6 +295,78 @@ def load_scheme(data_dir):
         "all_texts": all_texts,
         "norm_texts": text_tokens(all_texts),
     }
+
+
+# ============================================================
+# Слияние нескольких документов одного типа (главный + extra)
+# ============================================================
+
+def load_scheme_bundle(entries):
+    """Все схемы связки одним словарём. Каждый device_tag помнит, из какого
+    документа он пришёл ("doc") - ссылка в находке обязана вести на документ,
+    где обозначение реально подписано, а не на главный по умолчанию. При
+    совпадении тега в нескольких схемах остаётся главный (entries[0] - он)."""
+    merged = None
+    for e in entries:
+        data = load_scheme(e["data_dir"])
+        if data is None:
+            continue
+        for tag in data["device_tags"].values():
+            tag["doc"] = e["name"]
+        if merged is None:
+            merged = data
+            continue
+        for key, tag in data["device_tags"].items():
+            merged["device_tags"].setdefault(key, tag)
+        merged["articles"] |= data["articles"]
+        merged["all_texts"] |= data["all_texts"]
+        merged["norm_texts"] |= data["norm_texts"]
+        if not merged.get("designation"):
+            merged["designation"] = data.get("designation")
+    return merged
+
+
+def load_assembly_bundle(entries):
+    """Все части чертежа связки одним словарём, с пометкой документа у каждого
+    элемента и обозначения (см. load_scheme_bundle - причина та же)."""
+    merged = None
+    for e in entries:
+        data = load_assembly(e["data_dir"])
+        if data is None:
+            continue
+        for el in data["elements"]:
+            el["doc"] = e["name"]
+        for info in data["designator_index"].values():
+            info["doc"] = e["name"]
+        if merged is None:
+            merged = data
+            continue
+        merged["elements"] = list(merged["elements"]) + list(data["elements"])
+        for des, info in data["designator_index"].items():
+            merged["designator_index"].setdefault(des, info)
+        merged["all_texts"] = list(merged["all_texts"]) + list(data["all_texts"])
+        st, add = merged["statistics"], data["statistics"]
+        st["total_sheets"] = (st.get("total_sheets") or 0) + (add.get("total_sheets") or 0)
+        if not merged.get("designation"):
+            merged["designation"] = data.get("designation")
+    return merged
+
+
+def _is_empty(dtype, data):
+    """Документ, из которого не извлеклось НИЧЕГО. Это провал парсера, а не
+    пустой шкаф, и участвовать в сверке такой документ не должен: пустая
+    спецификация читается правилами как «ничего не заказано» и выдаёт вал
+    ложных MISSING (16 из 17 находок на связке КОС - ровно этот случай),
+    пустой чертёж - как «ничего не нарисовано»."""
+    if data is None:
+        return True
+    if dtype == "spec":
+        return not data["items"]
+    if dtype == "assembly":
+        return not data["elements"] and not data["all_texts"]
+    if dtype == "scheme":
+        return not data["device_tags"] and not data["all_texts"]
+    return False
 
 
 # ============================================================
@@ -448,8 +559,11 @@ def rule_spec_element_not_on_assembly(bundle, docs, loaded):
         ]
         if scheme and docs.get("scheme"):
             tag = scheme["device_tags"].get(des_norm)
+            # тег мог прийти не с главной схемы связки, а с однолинейной или
+            # схемы внешних соединений - ссылка ведёт туда, где он подписан
             refs.append(_ref(
-                docs["scheme"]["name"], "scheme", "classified.json",
+                (tag or {}).get("doc") or docs["scheme"]["name"],
+                "scheme", "classified.json",
                 sheet=(tag["sheets"][0] if tag and tag["sheets"] else None),
                 designator=original,
                 found=(f"обозначение {original!r} на схеме есть"
@@ -525,10 +639,17 @@ def rule_article_not_in_spec(bundle, docs, loaded):
             continue
         by_article[e["article"]].append(e)
 
+    captions = _caption_articles(asm)
+    spec_des = {norm_designator(d)
+                for it in spec["items"] for d in it.get("designators", [])}
+
     findings = []
     for article, elems in sorted(by_article.items()):
         a_norm = norm(article)
         if not a_norm or a_norm in spec_articles:
+            continue
+        # типовая подпись на картинке изделия, а не артикул (см. _caption_articles)
+        if article in captions or VOLTAGE_RE.match(a_norm):
             continue
         # Артикул без единой цифры - не артикул. У изделия в каталоге номер
         # обязательно содержит цифры ('DVP16SN11T', '260511', 'ND16-22DS/2',
@@ -554,6 +675,12 @@ def rule_article_not_in_spec(bundle, docs, loaded):
             continue
         if article_tokens(article) & spec_articles:
             continue
+        # Все обозначения этого артикула в спецификации ЕСТЬ - значит изделие
+        # заказано, а расходится только артикул. Это случай
+        # rule_article_mismatch, и он его уже покажет; вторая находка о том же
+        # ('изделие не заказано' при заказанном изделии) - шум и неправда.
+        if all(norm_designator(e["designator"]) in spec_des for e in elems):
+            continue
         designators = sorted({e["designator"] for e in elems})
         sheets = sorted({e["sheet"] for e in elems})
         findings.append(_finding(
@@ -562,7 +689,8 @@ def rule_article_not_in_spec(bundle, docs, loaded):
             severity="high",
             type_ru="Изделие с чертежа отсутствует в спецификации",
             refs=[
-                _ref(docs["assembly"]["name"], "assembly", "assembly.json",
+                _ref(elems[0].get("doc") or docs["assembly"]["name"],
+                     "assembly", "assembly.json",
                      sheet=sheets[0], designator=designators[0], article=article,
                      quantity=len(elems),
                      found=f"лист {sheets[0]}: подпись {designators[0]!r} / {article!r}"
@@ -621,6 +749,24 @@ def rule_designator_not_in_spec(bundle, docs, loaded):
         des_norm = norm_designator(des)
         if not des_norm or des_norm in spec_designators:
             continue
+        # По ГОСТ 2.710 позиционное обозначение оканчивается порядковым НОМЕРОМ
+        # ('HL3', '1SB01'). Токен без номера на конце ('3HL', '17SA') - это
+        # обрезанная подпись (номер уехал в соседний фрагмент) или буквенный
+        # код без экземпляра; замер на ЭОМ: 14 из 21 находки по ПЭСПЗ были
+        # ровно такими. Судить по обрывку нельзя - пропускаем.
+        if not des_norm[-1:].isdigit():
+            continue
+        # Маркировка вывода по МЭК ('1NO', 'A1') - подпись контакта, не изделие;
+        # тот же капкан, что в rule_article_not_in_spec.
+        if IEC_TERMINAL_RE.match(des_norm):
+            continue
+        # Подпись-диапазон ('FU1-FU3'): спецификация хранит концы по одному
+        # (FU1, FU2, FU3), и целиком такой ключ в ней не найдётся никогда.
+        # Если ВСЕ части диапазона в спецификации есть - изделия заказаны.
+        if "-" in des_norm:
+            parts = [p for p in des_norm.split("-") if p]
+            if parts and all(p in spec_designators for p in parts):
+                continue
         tag = scheme["device_tags"].get(des_norm)
         if not tag:
             continue                       # на схеме нет - правило молчит
@@ -637,11 +783,13 @@ def rule_designator_not_in_spec(bundle, docs, loaded):
                      designator=des,
                      found=f"обозначения {des!r} нет ни в одной из "
                            f"{spec['statistics'].get('total_rows')} строк спецификации"),
-                _ref(docs["assembly"]["name"], "assembly", "assembly.json",
+                _ref(info.get("doc") or docs["assembly"]["name"],
+                     "assembly", "assembly.json",
                      sheet=(asm_sheets[0] if asm_sheets else None), designator=des,
                      found=f"подписано на листах {asm_sheets}" if asm_sheets
                            else f"обозначение {des!r} подписано на чертеже"),
-                _ref(docs["scheme"]["name"], "scheme", "classified.json",
+                _ref(tag.get("doc") or docs["scheme"]["name"],
+                     "scheme", "classified.json",
                      sheet=(sch_sheets[0] if sch_sheets else None), designator=des,
                      found=f"подписано на листах {sch_sheets}" if sch_sheets
                            else f"обозначение {des!r} подписано на схеме"),
@@ -691,11 +839,17 @@ def rule_article_mismatch(bundle, docs, loaded):
 
     spec_rows = _spec_rows_by_designator(spec)
 
-    # обозначение -> артикулы, спаренные в блоке
+    # обозначение -> артикулы, спаренные в блоке. Типовые подписи на картинках
+    # ('230VAC' у каждого реле) и номиналы напряжения артикулами не считаются:
+    # без этого фильтра сверка КОС дала 320 ложных «разный артикул» из 322 -
+    # каждая строка спецификации реле «расходилась» с надписью 230VAC.
+    captions = _caption_articles(asm)
     asm_block = defaultdict(set)
     asm_meta = {}
     for e in asm["elements"]:
         if e.get("pair_source") != "block" or not e.get("article"):
+            continue
+        if e["article"] in captions or VOLTAGE_RE.match(norm(e["article"])):
             continue
         asm_block[norm(e["designator"])].add(e["article"])
         asm_meta.setdefault(norm(e["designator"]), e)
@@ -744,7 +898,8 @@ def rule_article_mismatch(bundle, docs, loaded):
                  name=row.get("name"), quantity=row.get("quantity"),
                  found=f"строка {row.get('row')}: код {row.get('code')!r}"
                        + (f", примечание {note!r}" if note else "")),
-            _ref(docs["assembly"]["name"], "assembly", "assembly.json",
+            _ref(e.get("doc") or docs["assembly"]["name"],
+                 "assembly", "assembly.json",
                  sheet=e.get("sheet"), designator=designator, article=asm_article,
                  found=f"лист {e.get('sheet')}: подпись {designator!r} / {asm_article!r}"),
         ]
@@ -755,7 +910,8 @@ def rule_article_mismatch(bundle, docs, loaded):
             if on_scheme and docs.get("scheme"):
                 tag = scheme["device_tags"].get(des_norm)
                 refs.append(_ref(
-                    docs["scheme"]["name"], "scheme", "classified.json",
+                    (tag or {}).get("doc") or docs["scheme"]["name"],
+                    "scheme", "classified.json",
                     sheet=(tag["sheets"][0] if tag and tag["sheets"] else None),
                     designator=designator, article=asm_article,
                     found=f"на схеме подписан модуль {asm_article!r}"))
@@ -809,13 +965,26 @@ def check_bundle(bundle, docs):
 
     bundle: имя связки.
     docs: {"scheme"|"assembly"|"spec": {"name":..., "data_dir":..., "source":...}}
+    Каждое значение может нести "extra" - список ДРУГИХ документов того же
+    типа этой связки (несколько схем шкафа, чертёж из нескольких частей). Их
+    данные объединяются с главным документом, см. load_*_bundle.
     Возвращает находки в формате schema.REPORT_SCHEMA.
     """
     loaded = {}
-    loaders = {"spec": load_spec, "assembly": load_assembly, "scheme": load_scheme}
-    for dtype, loader in loaders.items():
-        if docs.get(dtype):
-            loaded[dtype] = loader(docs[dtype]["data_dir"])
+    if docs.get("spec"):
+        # спецификации не объединяются: у связки она одна, а строки двух
+        # спецификаций с одинаковыми номерами перемешались бы в ссылках
+        loaded["spec"] = load_spec(docs["spec"]["data_dir"])
+    if docs.get("assembly"):
+        loaded["assembly"] = load_assembly_bundle(_doc_entries(docs, "assembly"))
+    if docs.get("scheme"):
+        loaded["scheme"] = load_scheme_bundle(_doc_entries(docs, "scheme"))
+
+    # Пустое извлечение - не данные: правила читали бы его как «в документе
+    # ничего нет» и штамповали ложные MISSING. Документ выбывает из сверки.
+    for dtype in list(loaded):
+        if _is_empty(dtype, loaded[dtype]):
+            loaded[dtype] = None
 
     findings = []
     for rule in ALL_RULES:

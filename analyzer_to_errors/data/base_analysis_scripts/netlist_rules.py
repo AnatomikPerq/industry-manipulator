@@ -221,6 +221,75 @@ def rule_reserve_tag_placement(document, conns):
     )]
 
 
+def rule_duplicate_signal_channel(document, conns):
+    """ПЕРЕЧЕНЬ СИГНАЛОВ: один адрес канала ПЛК в двух строках.
+
+    Канал контроллера существует в единственном экземпляре, и перечень
+    перечисляет каналы по одному на строку - второй '1DO7' означает, что один
+    из двух сигналов останется неподключённым. Проверка точная по построению
+    (сравниваются готовые строки адресов); замер на обоих перечнях КОС
+    (177 + 280 каналов) - ноль ложных срабатываний.
+    """
+    by_addr = defaultdict(list)
+    for c in conns:
+        addr = c.get("connection_address")
+        if addr:
+            by_addr[addr].append(c)
+    findings = []
+    for addr, group in sorted(by_addr.items()):
+        if len(group) < 2:
+            continue
+        rows = [g.get("id") for g in group]
+        descriptions = [g.get("note") or "" for g in group]
+        findings.append(_finding(
+            kind="DUPLICATE",
+            severity="high",
+            type_ru="Один канал ПЛК в двух строках перечня сигналов",
+            refs=[_ref(document, g) for g in group[:2]],
+            finding=f"Адрес канала {addr!r} стоит в {len(group)} строках перечня "
+                    f"(строки {', '.join(map(str, rows))}), а канал контроллера "
+                    f"существует один: один из сигналов останется неподключённым. "
+                    f"Сигналы: {'; '.join(d[:60] for d in descriptions[:2])}.",
+            action=f"Проверить адресацию: одному из сигналов назначить свободный "
+                   f"канал вместо {addr!r}.",
+            evidence=f"connection_address={addr!r} встречается {len(group)} раз",
+        ))
+    return findings
+
+
+def rule_duplicate_cable(document, conns):
+    """КАБЕЛЬНЫЙ ЖУРНАЛ: одно обозначение кабеля в двух строках.
+
+    Журнал ведётся по одному кабелю на строку; повторное обозначение - это
+    либо два кабеля под одним именем (не смонтировать), либо задвоенная
+    строка. Замер на журнале КОС (153 кабеля) - ноль ложных срабатываний.
+    """
+    by_cable = defaultdict(list)
+    for c in conns:
+        cable = c.get("cable_harness")
+        if cable:
+            by_cable[cable].append(c)
+    findings = []
+    for cable, group in sorted(by_cable.items()):
+        if len(group) < 2:
+            continue
+        rows = [g.get("id") for g in group]
+        routes = [g.get("note") or "" for g in group]
+        findings.append(_finding(
+            kind="DUPLICATE",
+            severity="high",
+            type_ru="Одно обозначение кабеля в двух строках журнала",
+            refs=[_ref(document, g) for g in group[:2]],
+            finding=f"Обозначение кабеля {cable!r} стоит в {len(group)} строках "
+                    f"журнала (строки {', '.join(map(str, rows))}). Трассы: "
+                    f"{'; '.join(r[:70] for r in routes[:2])}.",
+            action=f"Проверить журнал: если это разные кабели - развести обозначения, "
+                   f"если одна строка задвоена - убрать дубль.",
+            evidence=f"cable_harness={cable!r} встречается {len(group)} раз",
+        ))
+    return findings
+
+
 ALL_RULES = [
     rule_duplicate_address,
     rule_tag_duplicated_in_conductor,
@@ -229,14 +298,25 @@ ALL_RULES = [
     rule_reserve_tag_placement,
 ]
 
+# Какие правила осмыслены для какого ВИДА таблицы (metadata.table_kind в
+# connections.json). Перечень сигналов и кабельный журнал - не ГОСТ-таблицы
+# подключений: у них нет клеммников, штифтов и KKS по построению, и правила
+# про них выдавали бы по INCOMPLETE на каждую строку. Отсутствие table_kind
+# (данные старых прогонов) означает ГОСТ-таблицу.
+RULES_BY_KIND = {
+    "gost_connections": ALL_RULES,
+    "signal_list": [rule_duplicate_signal_channel],
+    "cable_journal": [rule_duplicate_cable],
+}
+
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
-def check_connections(document, connections):
+def check_connections(document, connections, table_kind="gost_connections"):
     """Главная точка входа: список записей нетлиста -> список находок в формате
     schema.REPORT_SCHEMA (тот же, что у агентов)."""
     findings = []
-    for rule in ALL_RULES:
+    for rule in RULES_BY_KIND.get(table_kind, ALL_RULES):
         findings.extend(rule(document, connections))
     findings.sort(key=lambda f: SEVERITY_ORDER.get(f["severity"], 9))
     return findings
@@ -245,7 +325,10 @@ def check_connections(document, connections):
 def check_connections_file(document, connections_path):
     with open(connections_path, encoding="utf-8") as f:
         data = json.load(f)
-    return check_connections(document, data.get("connections", []))
+    kind = ((data.get("statistics") or {}).get("table_kind")
+            or (data.get("document_metadata") or {}).get("table_kind")
+            or "gost_connections")
+    return check_connections(document, data.get("connections", []), kind)
 
 
 def main():
