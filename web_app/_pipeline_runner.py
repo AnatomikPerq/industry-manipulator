@@ -119,13 +119,18 @@ def main():
             args["base_config_path"], args["paths"], args["session_config_path"])
 
         skip_agents = bool(args.get("skip_agents"))
+        visual = bool(args.get("visual"))
         merged = pipeline.run_pipeline(
             config_path=config_path,
             doc_types=args.get("doc_types") or None,
             skip_agents=skip_agents,
+            visual=visual,
             clear_previous=bool(args.get("clear_previous")),
-            # в режиме "без ИИ" очередь не нужна: до агентов дело не дойдёт
-            llm_gate=None if skip_agents else wait_for_llm_slot,
+            # Очередь нужна, если прогон вообще пойдёт к серверу ИИ. Зрению он
+            # нужен ровно так же, как агентам, и сервер тот же самый - поэтому
+            # режим "зрение без агентов" в очереди стоит, а "только скрипты"
+            # не стоит: до модели дело не дойдёт.
+            llm_gate=None if (skip_agents and not visual) else wait_for_llm_slot,
         )
         result["ok"] = True
         result["n_findings"] = len(merged.get("errors", []))

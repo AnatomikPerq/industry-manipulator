@@ -57,7 +57,7 @@ from validation import JSONValidationError
 # (web_app/server.py, web_app/_pipeline_runner.py, report_pdf.py, тесты), и
 # ломать эти вызовы ради перестановки файлов незачем.
 from settings import (PROJECT_ROOT, SEVERITY_ORDER, load_config,  # noqa: F401
-                      resolve_path)
+                      resolve_path, resolve_vision_cfg)
 from stages import (load_type_overrides, run_bundle_stage,  # noqa: F401
                     run_extraction_stage, run_rules_stage)
 
@@ -127,23 +127,28 @@ class LLMUnavailableError(RuntimeError):
     """Сервер ИИ недоступен - полный анализ (с агентами) невозможен."""
 
 
-def preflight_llm(cfg: dict) -> None:
+def preflight_llm(cfg: dict, agents: bool = True, vision: bool = False) -> None:
     """Быстрая проверка доступности серверов ИИ ПЕРЕД запуском агентов.
 
     Нужна, чтобы при недоступном сервере анализ падал сразу с понятной ошибкой
     в консоль, а не висел минутами и не выдавал криптическую ошибку соединения
     litellm где-то в середине. Проверяется сервер каждого агента, который
-    реально будет запущен (при agents.count: 1 - только выбранный single_agent).
+    реально будет запущен (при agents.count: 1 - только выбранный single_agent),
+    и, если включено зрение, сервер модели зрения.
     """
     agents_cfg = cfg.get("agents", {})
-    if agents_cfg.get("count", 2) == 1:
-        keys = (agents_cfg.get("single_agent", "agent_1"),)
-    else:
-        keys = ("agent_1", "agent_2")
+    servers = []
+    if agents:
+        if agents_cfg.get("count", 2) == 1:
+            keys = (agents_cfg.get("single_agent", "agent_1"),)
+        else:
+            keys = ("agent_1", "agent_2")
+        servers += [cfg["llm_servers"][key] for key in keys]
+    if vision:
+        servers.append(resolve_vision_cfg(cfg))
 
     checked = {}
-    for key in keys:
-        scfg = cfg["llm_servers"][key]
+    for scfg in servers:
         base = scfg["base_url"]
         if base in checked:
             ok = checked[base]
@@ -225,7 +230,8 @@ def clear_previous_results(cfg: dict) -> None:
 def run_pipeline(input_dir: str = None, known_errors_path: str = None,
                  output_dir: str = None, config_path: str = None,
                  doc_types: dict = None, skip_extract: bool = False,
-                 skip_agents: bool = False, clear_previous: bool = False,
+                 skip_agents: bool = False, visual: bool = False,
+                 clear_previous: bool = False,
                  bundles: dict = None, llm_gate=None) -> dict:
     """Главная точка входа для использования из другого скрипта (без CLI).
 
@@ -240,8 +246,13 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
         что уже лежит в data/.
     skip_agents: НЕ запускать LLM-агентов и мерджер - отчёт собирается только из
         находок детерминированного чекера (режим "без ИИ, только скрипты").
+    visual: включить СТАДИЮ ЗРЕНИЯ (visual_stage.py) - модель со зрением смотрит
+        на растр листов схемы и восстанавливает привязку подписей к линиям, по
+        которой судит детерминированный чекер. Сочетается с любым значением
+        skip_agents: "зрение без текстовых агентов" - осмысленный режим.
     clear_previous: стереть результаты прошлого анализа перед запуском.
-    llm_gate: вызывается ОДИН РАЗ прямо перед стадией агентов и может блокировать
+    llm_gate: вызывается ОДИН РАЗ прямо перед первой стадией, которой нужен
+        сервер ИИ (зрение, а если его нет - агенты), и может блокировать
         сколько угодно долго. Через него веб-интерфейс держит очередь: скрипты
         (извлечение, чекеры, сверка связок) считаются сразу и параллельно с
         другими сессиями - они грузят локальный процессор и друг другу не мешают,
@@ -292,8 +303,34 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
     rule_findings = rule_findings + bundle_findings
     logger.info("Всего находок скриптов: %d (до запуска нейросетей)", len(rule_findings))
 
+    # Дальше нужен сервер ИИ - и зрению, и агентам. Он один на всех, поэтому
+    # очередь берётся ОДИН раз на обе стадии: отпустив слот между ними, мы бы
+    # заставили LM Studio выгрузить модель зрения и загрузить текстовую, потом
+    # обратно - на 30-миллиардных моделях это дороже самой работы.
+    needs_llm = visual or not skip_agents
+    if needs_llm and llm_gate is not None:
+        llm_gate()
+    if needs_llm:
+        preflight_llm(cfg, agents=not skip_agents, vision=visual)
+
+    if visual:
+        # Импорт здесь, а не наверху: visual_stage тянет fitz, а main
+        # импортируется веб-сервером ради load_config - той же причины, по
+        # которой внутри своих обработчиков импортируются report_pdf и fragment.
+        import visual_stage
+
+        logger.info("Стадия зрения: модель смотрит на растр листов")
+        visual_findings = visual_stage.run_visual_stage(cfg, data_dir)
+        logger.info("Зрение нашло %d находок", len(visual_findings))
+        # Находки зрения идут в ту же корзину, что и находки чекеров, и не
+        # случайно: судит по ответу модели детерминированная арифметика
+        # (visual_stage.odd_one_out), а не сама модель. Значит их, как и
+        # находки чекеров, нельзя терять на LLM-слиянии.
+        rule_findings = rule_findings + visual_findings
+
     if skip_agents:
-        logger.info("Режим без ИИ: агенты и мерджер пропущены, отчёт только из находок чекера")
+        logger.info("Агенты и мерджер пропущены, отчёт только из находок чекеров"
+                    + (" и зрения" if visual else ""))
         # known_errors применяются и здесь: мерджера в этом режиме нет, а он был
         # единственным местом, где файл вообще читался. Без этого «известная
         # ошибка» гасилась только при полном прогоне с ИИ - ровно наоборот тому,
@@ -302,28 +339,19 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
         merged = {
             "errors": sorted(errors,
                              key=lambda f: SEVERITY_ORDER.get(f.get("severity"), 9)),
-            "summary": (f"Анализ без ИИ (только скрипты): найдено {len(errors)} "
-                        f"замечаний детерминированными чекерами документов и сверкой "
-                        f"связок."),
+            "summary": ((f"Анализ без текстовых агентов: найдено {len(errors)} "
+                         f"замечаний детерминированными чекерами документов, сверкой "
+                         f"связок и визуальной проверкой схем.")
+                        if visual else
+                        (f"Анализ без ИИ (только скрипты): найдено {len(errors)} "
+                         f"замечаний детерминированными чекерами документов и сверкой "
+                         f"связок.")),
         }
         merged_path = out_dir / "merged_report.json"
         merged_path.write_text(json.dumps(merged, ensure_ascii=False, indent=2),
                                encoding="utf-8")
         logger.info("Итоговый отчёт сохранён: %s", merged_path)
         return merged
-
-    # Скрипты отработали, дальше нужен сервер ИИ - а он один на всех. Здесь
-    # прогон и встаёт в очередь (если вызывающий её завёл): всё, что можно было
-    # посчитать без модели, уже посчитано, и ждать своей очереди сессия уходит
-    # с готовыми находками чекеров на руках.
-    if llm_gate is not None:
-        llm_gate()
-
-    # Проверяем, что серверы ИИ вообще доступны - иначе сразу понятная ошибка
-    # в консоль, а не зависание на минуты. ПОСЛЕ очереди, а не до: между
-    # постановкой и своим ходом сессия может простоять час, и проверка,
-    # сделанная в начале этого часа, ничего не говорит о его конце.
-    preflight_llm(cfg)
 
     agent_cfg = cfg["agent"]
     max_repair = agent_cfg["max_json_repair_attempts"]
@@ -402,6 +430,11 @@ def main():
                         help="только детерминированный чекер таблиц подключений, без LLM")
     parser.add_argument("--skip-extract", action="store_true",
                         help="не перезапускать парсеры, анализировать готовые данные в data/")
+    parser.add_argument("--visual", action="store_true",
+                        help="включить стадию зрения: модель смотрит на растр листов схемы")
+    parser.add_argument("--no-agents", action="store_true",
+                        help="без текстовых агентов и мерджера. Вместе с --visual даёт "
+                             "быстрый цикл отладки зрения на уже извлечённых данных")
     parser.add_argument("--check-llm", action="store_true",
                         help="проверить ТОЛЬКО нейросети (сервер, модель, формат JSON) - "
                              "без PDF, парсеров и папки data")
@@ -440,7 +473,8 @@ def main():
 
     try:
         merged = run_pipeline(args.input, args.known_errors, args.output_dir,
-                              args.config, skip_extract=args.skip_extract)
+                              args.config, skip_extract=args.skip_extract,
+                              skip_agents=args.no_agents, visual=args.visual)
     except (ExtractionError, FileNotFoundError) as e:
         logger.error("Пайплайн остановлен на стадии извлечения: %s", e)
         sys.exit(1)

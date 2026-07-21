@@ -63,6 +63,26 @@ def load_config(path: str) -> dict:
     return cfg
 
 
+def resolve_vision_cfg(cfg: dict) -> dict:
+    """Настройки сервера для модели зрения.
+
+    Берём сервер названного агента ЦЕЛИКОМ (в том числе base_url, который
+    переопределён в config.local.yaml) и накрываем полями ветки vision - тем,
+    что у зрения своё: другая модель на том же сервере, своя температура, свой
+    лимит ответа. Тот же приём, что у merger.use_agent, и по той же причине:
+    второй адрес сервера в конфиге - это второй адрес, который однажды
+    разъедется с первым.
+    """
+    servers = cfg.get("llm_servers", {})
+    vision = dict(servers.get("vision") or {})
+    base = dict(servers.get(vision.get("use_agent", "agent_1"), {}))
+    for key, value in vision.items():
+        if key == "use_agent" or value is None:
+            continue          # null у model означает «та же, что у агента»
+        base[key] = value
+    return base
+
+
 def resolve_path(p) -> Path:
     """Пути из config.yaml - относительно корня проекта, а не cwd:
     пайплайн должен работать одинаково, откуда бы его ни запустили

@@ -11,6 +11,17 @@ import { showReport } from "./report.js";
 import { $, askNotifyPermission, classifyLog, esc, fetchJSON, fmtSize, logLine,
          setStatus, showView } from "./util.js";
 
+// Как режим прогона называется по-русски. Одна таблица на весь модуль: подпись
+// нужна и в строке статуса, и в консоли, и раньше «полный/без ИИ» стояло в двух
+// местах отдельными тернарниками - третий режим разъехался бы с ними молча.
+// Ключи обязаны совпадать с теми, что принимает server.py::_api_enqueue.
+const MODE_LABELS = {
+  scripts: "без ИИ",
+  full: "полный",
+  visual: "визуальный",
+  full_visual: "полный + визуальный",
+};
+
 // Поллинг ОТКРЫТОЙ сессии. Живёт здесь, а не в роутере: заводит его этот
 // экран, и гасить его умеет только он.
 let sessionTimer = null;
@@ -89,7 +100,7 @@ export function renderSessionStatus() {
       : "Принята к исполнению. Можно закрыть вкладку.", true);
     showCancel(true);
   } else if (m.status === "running") {
-    const mode = m.mode === "scripts" ? "без ИИ" : "полный";
+    const mode = MODE_LABELS[m.mode] || "полный";
     let text;
     if (m.stage === "очередь к ИИ") {
       // Главное, что здесь надо сказать: скрипты УЖЕ отработали. Иначе
@@ -98,7 +109,11 @@ export function renderSessionStatus() {
         ? `Скрипты отработали. Ожидание очереди к серверу ИИ, ${m.llm_position}-я.`
         : "Скрипты отработали. Ожидание очереди к серверу ИИ.";
     } else if (m.stage === "ИИ") {
-      text = "Анализ нейросетями…";
+      // У стадии зрения прогресс ЕСТЬ (порядок листов и тайлов выбирает
+      // пайплайн), у текстовых агентов его нет и быть не может - там модель
+      // сама решает, какой файл открыть. Поэтому не «или-или», а «если есть».
+      const detail = progressText(m);
+      text = detail ? `Анализ нейросетями: ${detail}` : "Анализ нейросетями…";
     } else {
       const detail = progressText(m);
       text = detail ? `Работают скрипты: ${detail}` : `Идёт анализ… (режим: ${mode})`;
@@ -324,7 +339,7 @@ export async function enqueue(mode) {
   closeRunMenu();
   askNotifyPermission();
   $("report-section").classList.remove("show");
-  logLine(`--- Сессия ставится в очередь (режим: ${mode === "scripts" ? "без ИИ" : "полный"}) ---`, "ok");
+  logLine(`--- Сессия ставится в очередь (режим: ${MODE_LABELS[mode] || mode}) ---`, "ok");
   try {
     const data = await fetchJSON(`/api/sessions/${encodeURIComponent(S.id)}/enqueue`, {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -378,5 +393,20 @@ export async function renameSession() {
 
 
 // Меню выбора режима у кнопки запуска - часть этого экрана.
-export function toggleRunMenu() { $("run-menu").classList.toggle("open"); }
+export function toggleRunMenu() {
+  const menu = $("run-menu");
+  const opened = menu.classList.toggle("open");
+  // Меню выпадает ВНИЗ и с появлением визуальных режимов выросло вдвое (288 px
+  // против 134). Открытое у нижнего края экрана, оно оставляет последний пункт
+  // за сгибом - а пользователь не знает, что там что-то есть, и не догадается
+  // прокрутить. Подтягиваем меню в видимую область целиком.
+  //
+  // Прокрутка - СИНХРОННО и БЕЗ behavior: "smooth". Оба откладывания были
+  // проверены и оба молча не срабатывали: плавную прокрутку браузер вправе
+  // проигнорировать (например, при включённом «уменьшении анимации»), а
+  // колбэк requestAnimationFrame не вызывается в неотрисовываемой вкладке.
+  // Класс .open применяется тут же, размеры у меню появляются сразу -
+  // откладывать нечего.
+  if (opened) menu.scrollIntoView({ block: "nearest" });
+}
 export function closeRunMenu() { $("run-menu").classList.remove("open"); }

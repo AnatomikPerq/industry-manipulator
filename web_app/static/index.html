@@ -14,7 +14,7 @@
       <h1>Анализатор проектной документации</h1>
       <div class="sub">Проверка EPLAN-схем и таблиц подключений на ошибки</div>
     </div>
-    <span class="version-badge" id="version-badge">V1.6</span>
+    <span class="version-badge" id="version-badge">V1.8 Aplha</span>
   </header>
 
   <main>
@@ -96,6 +96,17 @@
                   <span>Извлечение и детерминированные чекеры. Быстро, ИИ не нужен,
                     в очереди не ждёт.</span>
                 </button>
+                <button data-mode="visual">
+                  <b>Визуальный анализ схем</b>
+                  <span>Нейросеть со зрением смотрит на сами листы схемы, а не на
+                    извлечённый текст: находит то, что скрипту не видно. Долго —
+                    лист режется на фрагменты, каждый разбирается отдельно.</span>
+                </button>
+                <button data-mode="full_visual">
+                  <b>Полный + визуальный</b>
+                  <span>Всё сразу: скрипты, зрение и текстовые агенты. Самый долгий
+                    режим; сервер ИИ занят одной сессией от начала до конца.</span>
+                </button>
               </div>
             </div>
             <div class="hint-text">Вкладку можно закрыть — результат дождётся вас
@@ -173,7 +184,7 @@
 
     <footer class="app-footer">
       <b>ИНДУСТРИЯ МАНИПУЛЯТОР</b> · Анализатор проектной документации ·
-      <span id="footer-version">V1.6</span>
+      <span id="footer-version">V1.8 Aplha</span>
     </footer>
   </main>
 

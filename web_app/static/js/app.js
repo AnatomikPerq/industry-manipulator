@@ -32,7 +32,15 @@ let watchTimer = null;
 async function init() {
   try {
     const cfg = await fetchJSON("/api/config");
-    DOC_TYPES = cfg.doc_types;
+    // ИМЕННО setDocTypes, а не присваивание. DOC_TYPES - импортированная
+    // константа-массив, и он МУТИРУЕТСЯ на месте (state.js): модули, которые
+    // импортировали его один раз, обязаны видеть те же данные. Присваивание
+    // здесь роняло init() с «Assignment to constant variable» ещё до
+    // renderDocTypes() - и список принимаемых документов оставался пуст, а
+    // выпадающий список типов файла - без единого пункта. Ошибка при этом
+    // выглядела как отказ сервера («не удалось загрузить конфигурацию»),
+    // хотя сервер отвечал исправно.
+    setDocTypes(cfg.doc_types);
     $("version-badge").textContent = cfg.version;
     $("meta-version").textContent = cfg.version;
     $("footer-version").textContent = cfg.version;

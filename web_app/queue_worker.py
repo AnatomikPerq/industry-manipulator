@@ -82,6 +82,25 @@ LLM_WAIT_MARKER = "@@LLM_WAIT"
 # Такие строки в лог НЕ кладутся: альбом на 300 листов дал бы 300 строк шума.
 PROGRESS_MARKER = "@@PROGRESS"
 
+# РЕЖИМ - ЭТО ДВА НЕЗАВИСИМЫХ ПЕРЕКЛЮЧАТЕЛЯ, а не четыре разных прогона:
+# запускать ли текстовых агентов и запускать ли стадию зрения. Интерфейсу
+# удобнее одна кнопка - один режим, поэтому строка; раскладывается она ровно
+# здесь и ровно один раз.
+#
+# Список режимов тоже живёт здесь, и server.py проверяет присланное по нему же:
+# два списка допустимых режимов - это два списка, которые однажды разъедутся, и
+# новый режим начнёт молча отвергаться сервером (или, хуже, молча приниматься
+# и исполняться как полный).
+MODES = ("scripts", "full", "visual", "full_visual")
+
+
+def run_flags(mode: str) -> dict:
+    """Режим интерфейса -> аргументы run_pipeline."""
+    return {
+        "skip_agents": mode in ("scripts", "visual"),
+        "visual": mode in ("visual", "full_visual"),
+    }
+
 
 def kill_process_tree(proc):
     """Мгновенно и гарантированно убивает подпроцесс анализа вместе со всеми его
@@ -335,7 +354,7 @@ class AnalysisQueue:
             # уже приведены к ключам, которых ждёт ingest (относительно
             # base_files) - см. SessionStore.prepare_run
             "doc_types": doc_types or None,
-            "skip_agents": (mode == "scripts"),
+            **run_flags(mode),
             "clear_previous": True,
         }
         tmp_dir = Path(tempfile.mkdtemp(prefix="ia_run_"))

@@ -77,7 +77,7 @@ import queue_worker                       # noqa: E402  (константы пу
 from queue_worker import AnalysisQueue    # noqa: E402
 from sessions import FULL_PROJECT_TYPE, SessionError, SessionStore  # noqa: E402
 
-PROJECT_VERSION = "V1.6"
+PROJECT_VERSION = "V1.8 Aplha"
 
 # Content-Type для просмотра исходных документов сессии прямо в браузере.
 # PDF отдаём inline (вкладка откроет встроенный просмотрщик), книгу Excel -
@@ -473,7 +473,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def _api_enqueue(self, session_id):
         mode = self._body_json().get("mode", "full")
-        if mode not in ("scripts", "full"):
+        # Список режимов - у очереди: она же его и раскладывает на флаги
+        # прогона. Свой список здесь означал бы, что новый режим надо не забыть
+        # добавить в двух местах.
+        if mode not in queue_worker.MODES:
             raise SessionError(f"Неизвестный режим: {mode}", 400)
         position = QUEUE.enqueue(session_id, mode)
         self._send_json({"ok": True, "mode": mode, "queue_position": position})
