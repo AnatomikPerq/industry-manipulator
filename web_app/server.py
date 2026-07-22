@@ -77,7 +77,7 @@ import queue_worker                       # noqa: E402  (константы пу
 from queue_worker import AnalysisQueue    # noqa: E402
 from sessions import FULL_PROJECT_TYPE, SessionError, SessionStore  # noqa: E402
 
-PROJECT_VERSION = "V1.8 Aplha"
+PROJECT_VERSION = "V1.9"
 
 # Content-Type для просмотра исходных документов сессии прямо в браузере.
 # PDF отдаём inline (вкладка откроет встроенный просмотрщик), книгу Excel -

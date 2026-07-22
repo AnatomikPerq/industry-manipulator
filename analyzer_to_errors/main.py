@@ -324,7 +324,7 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
         logger.info("Зрение нашло %d находок", len(visual_findings))
         # Находки зрения идут в ту же корзину, что и находки чекеров, и не
         # случайно: судит по ответу модели детерминированная арифметика
-        # (visual_stage.odd_one_out), а не сама модель. Значит их, как и
+        # (visual_stage.odd_ones_out), а не сама модель. Значит их, как и
         # находки чекеров, нельзя терять на LLM-слиянии.
         rule_findings = rule_findings + visual_findings
 

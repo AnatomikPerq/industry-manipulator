@@ -56,29 +56,27 @@ from settings import PROJECT_ROOT, load_config, resolve_vision_cfg
 # штрафовать модель за то, чего у неё не спрашивали.
 MARKING_RE = re.compile(r"^\d{1,4}$")
 
-READ_PROMPT = """Ты читаешь фрагмент принципиальной электрической схемы (ГОСТ).
+# Короткий - по той же замеренной причине, что и промпт стадии (см.
+# visual_stage.BAND_PROMPT): длинный разгонял рассуждение модели в полсотни раз.
+# Проба обязана спрашивать РОВНО то же, что стадия, иначе она калибрует не то.
+READ_PROMPT = """Второе изображение - фрагмент принципиальной электрической схемы
+({position}); первое - лист целиком, для ориентации.
 
-Первое изображение - лист целиком (для ориентации, читать его не нужно).
-Второе - фрагмент этого листа, {position}.
+Выпиши номера проводов - короткие числа, подписанные у линий связи. КАЖДУЮ
+подпись отдельно, повторы не объединяй. Пиши ровно то, что напечатано, ничего
+не исправляй.
 
-ЗАДАЧА: выпиши ВСЕ числовые подписи проводов, какие видишь на ФРАГМЕНТЕ.
-Это короткие числа (1-4 цифры), стоящие рядом с линией связи, обычно другим
-цветом. Не выписывай номера выводов внутри прямоугольников аппаратов, номера
-листов, обозначения в штампе и размеры.
-
-ВАЖНО:
-- выписывай ровно то, что напечатано, даже если число выглядит неуместным;
-- не додумывай и не исправляй: если рядом с одинаковыми проводами стоит другое
-  число - так и пиши;
-- если ничего не видно, верни пустой список.
-
-Ответ - ТОЛЬКО JSON, без пояснений:
-{{"markings": [{{"number": "5", "attached_to": "горизонтальная линия вверху, идёт вправо от клеммы +24V"}}]}}
+Только JSON:
+{{"markings": [{{"number": "5", "attached_to": "описание линии"}}]}}
 """
 
 SANITY_PROMPT = ("Что написано на картинке? Ответь одним словом, без пояснений.")
 
-SANITY_WORD = "ЩСКЗ"
+# ТОЛЬКО ЛАТИНИЦА И ЦИФРЫ. Картинка рисуется базовым шрифтом PyMuPDF (helv =
+# Helvetica), а в нём кириллицы нет: слово «ЩСКЗ» вышло четырьмя точками, и
+# модель, честно ответившая «многоточие», была объявлена незрячей. Проверка
+# зрения не должна зависеть от того, какие шрифты вшиты в PDF-библиотеку.
+SANITY_WORD = "QF17"
 
 
 def _extract_json(text: str) -> dict:
@@ -172,7 +170,8 @@ def _position(tile, plan) -> str:
             f"(тайл {tile.index + 1} из {len(plan.tiles)}, сетка {plan.rows}x{plan.cols})")
 
 
-def run_variant(page, ask, cap_px, max_tile_pixels, overlap, out_dir, verbose):
+def run_variant(page, ask, cap_px, max_tile_pixels, overlap, out_dir, verbose,
+                only_tiles=None):
     plan = tiling.plan_page(page, cap_px=cap_px, max_tile_pixels=max_tile_pixels,
                             overlap=overlap)
     overview_png, overview_pix = tiling.render_overview(page)
@@ -185,8 +184,10 @@ def run_variant(page, ask, cap_px, max_tile_pixels, overlap, out_dir, verbose):
           f"тайл {tile_w}x{tile_h} px = {tile_w * tile_h / 1e6:.1f} Мпикс, "
           f"тайлов с содержимым {len(useful)} из {len(plan.tiles)} ===")
 
-    total_gt, hit, extra, seconds = Counter(), Counter(), Counter(), 0.0
+    total_gt, hit, extra, seconds, refused = Counter(), Counter(), Counter(), 0.0, 0
     for tile in plan.tiles:
+        if only_tiles and (tile.index + 1) not in only_tiles:
+            continue
         if tile.ink < tiling.DEFAULT_MIN_INK:
             print(f"  {tile.label}: пропущен, чернил {tile.ink * 100:.2f}%")
             continue
@@ -196,8 +197,16 @@ def run_variant(page, ask, cap_px, max_tile_pixels, overlap, out_dir, verbose):
             (out_dir / f"cap{int(cap_px)}_t{tile.index + 1:02d}.png").write_bytes(png)
 
         started = time.monotonic()
-        answer = ask(READ_PROMPT.format(position=_position(tile, plan)),
-                     [overview_png, png])
+        try:
+            answer = ask(READ_PROMPT.format(position=_position(tile, plan)),
+                         [overview_png, png])
+        except Exception as e:  # noqa: BLE001 - отказ на тайле не повод бросать замер
+            # Отказы считаем отдельной строкой, а не выдаём за «ничего не
+            # прочитано»: это разные вещи, и путать их - значит получить
+            # правдоподобную, но лживую таблицу.
+            refused += 1
+            print(f"  {tile.label}: ОТКАЗ - {type(e).__name__}: {str(e)[:120]}")
+            continue
         elapsed = time.monotonic() - started
         seconds += elapsed
 
@@ -220,8 +229,8 @@ def run_variant(page, ask, cap_px, max_tile_pixels, overlap, out_dir, verbose):
     n_truth, n_hit, n_extra = sum(total_gt.values()), sum(hit.values()), sum(extra.values())
     print(f"  ИТОГО: прочитано {n_hit} из {n_truth} "
           f"({(n_hit / n_truth * 100 if n_truth else 0):.0f}%), "
-          f"выдумано {n_extra}, время {seconds:.0f} c "
-          f"({seconds / max(len(useful), 1):.1f} c/тайл)")
+          f"выдумано {n_extra}, отказов {refused}, время {seconds:.0f} c "
+          f"({seconds / max(len(useful) - refused, 1):.1f} c/тайл)")
 
     # Ради этих двух чисел всё и затевалось: они и есть две подтверждённые
     # ошибки листа 10.2, и чекер их не берёт.
@@ -233,7 +242,7 @@ def run_variant(page, ask, cap_px, max_tile_pixels, overlap, out_dir, verbose):
     return {"cap_px": cap_px, "zoom": plan.zoom, "grid": f"{plan.rows}x{plan.cols}",
             "tile_mpx": tile_w * tile_h / 1e6, "tiles": len(useful),
             "read": n_hit, "printed": n_truth, "invented": n_extra,
-            "seconds": seconds}
+            "refused": refused, "seconds": seconds}
 
 
 def main():
@@ -253,7 +262,13 @@ def main():
     parser.add_argument("--check", action="store_true",
                         help="только проверка, что модель видит картинки")
     parser.add_argument("--verbose", action="store_true", help="печатать ответы модели")
+    parser.add_argument("--tiles", default=None,
+                        help="разбирать только эти тайлы, через запятую (нумерация "
+                             "с единицы, как в выводе). Ради быстрого цикла: полный "
+                             "лист - это 12 вызовов по полминуты")
     args = parser.parse_args()
+    only_tiles = ({int(t) for t in args.tiles.replace(" ", "").split(",") if t}
+                  if args.tiles else None)
 
     cfg = load_config(args.config)
     server = resolve_vision_cfg(cfg)
@@ -283,18 +298,20 @@ def main():
         rows = []
         for cap_px in (args.cap_px or [12.0, 18.0, 26.0]):
             rows.append(run_variant(page, ask, float(cap_px), args.max_tile_pixels,
-                                    args.overlap, out_dir, args.verbose))
+                                    args.overlap, out_dir, args.verbose,
+                                    only_tiles=only_tiles))
     finally:
         doc.close()
 
     print("\n" + "=" * 78)
     print(f"{'прописная':>10} {'зум':>6} {'сетка':>7} {'Мпикс':>7} {'тайлов':>7} "
-          f"{'прочитано':>12} {'выдумано':>9} {'c/тайл':>8}")
+          f"{'прочитано':>12} {'выдумано':>9} {'отказов':>8} {'c/тайл':>8}")
     for r in rows:
         share = f"{r['read']}/{r['printed']}"
+        answered = max(r["tiles"] - r["refused"], 1)
         print(f"{r['cap_px']:>10.0f} {r['zoom']:>6.2f} {r['grid']:>7} "
               f"{r['tile_mpx']:>7.1f} {r['tiles']:>7} {share:>12} "
-              f"{r['invented']:>9} {r['seconds'] / max(r['tiles'], 1):>8.1f}")
+              f"{r['invented']:>9} {r['refused']:>8} {r['seconds'] / answered:>8.1f}")
     print("\nБерём наименьший зум, на котором прочитано ~всё и выдумано 0. "
           "Если выдумок много на ЛЮБОМ зуме - модель не годится для этой работы.")
 
