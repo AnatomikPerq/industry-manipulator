@@ -136,10 +136,25 @@ def detect_table_kind(pdf_path):
         page = pdf.pages[0]
         head = _norm_ws(" ".join(w["text"] for w in _page_words(page)
                                  if w["top"] < page.height * 0.25))
+    # «Перечень входных/выходных параметров контроля, регулирования, управления»
+    # (опросная таблица ГОСТ 21.408). Тоже перечень сигналов, но подписан
+    # иначе и, главное, несёт ГРАФУ «Позиция по схеме» - позиции приборов
+    # (HL101, NSF001, PT206), которыми он сшивается с ФСА и кабельным журналом.
+    # На «24-051-АК» это 27 листов, два документа.
+    if "позиция" in head and "схеме" in head and (
+            "сигнализация" in head or "пределы измерений" in head
+            or "резервирование" in head):
+        return "param_list"
     if "описание сигнала" in head and (
             "адрес plc" in head or "номер входа" in head or "номер выхода" in head):
         return "signal_list"
-    if "кабел" in head and "начало" in head and "конец" in head:
+    # «Начало/конец» - подписи ГОСТ 21.110, «откуда/куда» - обиходные, и второй
+    # парой пользуются ОБА бюро объекта 24-051. Пока их здесь не было, кабельные
+    # журналы АК (10 л.) и ЭОМ (16 л.) уезжали в ветку ГОСТ-таблицы подключений,
+    # где жёсткий COL_BOUNDS даёт НОЛЬ строк при статусе ok - тот же молчаливый
+    # отказ, ради которого этот детектор и появился.
+    if "кабел" in head and (("начало" in head and "конец" in head)
+                            or ("откуда" in head and "куда" in head)):
         return "cable_journal"
     return "gost_connections"
 
@@ -174,10 +189,41 @@ def _row_bands(page, min_width, gap_lo=8, gap_hi=45):
     В отличие от data_row_bands ГОСТ-шаблона, ширина линейки - параметр
     (перечень сигналов набран на A4, его линейки короче 500), а полосы штампа
     внизу листа отсеиваются не по скачку шага, а содержимым ячеек в вызывающем
-    коде (в колонке обозначения у штампа пусто)."""
-    ys = sorted(set(round(l["top"], 1) for l in page.lines
-                    if abs(l["top"] - l["bottom"]) < 1.0
-                    and abs(l["x0"] - l["x1"]) >= min_width))
+    коде (в колонке обозначения у штампа пусто).
+
+    Линейка бывает и ПРЯМОУГОЛЬНИКОМ, а не отрезком - ровно как вертикальные
+    разделители в _vertical_separators, и по той же причине: чем нарисована
+    таблица, решает экспорт CAD, а не бюро. У кабельных журналов АК и ЭОМ
+    горизонтальных отрезков на листе НОЛЬ при 994 и 761 прямоугольнике, и
+    журналы извлекались пустыми уже после того, как их научились опознавать.
+
+    И линейка НЕ ОБЯЗАНА быть цельной: у АК она нарисована по-ячеечно, кусками
+    ровно в ширину графы (74, 148, 120, 419 px при таблице шириной 1114), так
+    что ни один кусок не проходит порог сам по себе. Поэтому по каждому Y
+    копится СУММАРНАЯ длина - тот же приём и та же причина, что у вертикалей в
+    specification_pdf_to_json; min_width из «какой длины отрезок» становится
+    «сколько всего прочерчено на этой высоте».
+    """
+    from collections import defaultdict
+    acc = defaultdict(float)
+    for line in page.lines:
+        if abs(line["top"] - line["bottom"]) < 1.0:
+            acc[round(line["top"])] += abs(line["x1"] - line["x0"])
+    for rect in page.rects:
+        if rect["height"] < 2.5:
+            acc[round(rect["top"])] += rect["width"]
+
+    # Соседние Y - одна и та же линейка: границы соседних ячеек ставятся с
+    # разбросом в доли пикселя, а округление до целого разносит их по двум
+    # ключам и делит сумму пополам.
+    ys = []
+    for y in sorted(acc):
+        if ys and y - ys[-1] <= 2:
+            acc[ys[-1]] += acc[y]
+            continue
+        ys.append(y)
+
+    ys = [y for y in ys if acc[y] >= min_width]
     return [(a, b) for a, b in zip(ys, ys[1:]) if gap_lo <= b - a <= gap_hi]
 
 
@@ -223,6 +269,47 @@ def _map_alt_columns(words, seps, page_width, page_height, patterns):
     return mapping, header_bottom
 
 
+def _same_layout(page_seps, seps, tol=3.0):
+    """Одна ли это таблица: совпадает ли линовка листа с запомненной.
+
+    Раскладка колонок запоминается с листа, где нашлась шапка, и дальше
+    применяется к листам-продолжениям (у них шапки нет). Проверять при этом
+    ЛИНОВКУ обязательно: часть альбома, нарезанная по наименованию штампа,
+    регулярно содержит подшитые в конец листы ЧУЖОЙ таблицы - лист без
+    заполненной графы наименования наследует наименование предыдущего.
+
+    Замер: в «Кабельный журнал» ЭОМ так попали листы расчёта электрических
+    нагрузок. Их разбирали колонками журнала, и в графу «обозначение кабеля»
+    ложились обрывки названий оборудования («Горелочное устройство», «Насос
+    воды котлового») - по одному на каждый агрегат. Итог: 18 ложных находок
+    «одно обозначение кабеля в двух строках журнала» из 18.
+    """
+    if not page_seps or not seps or len(page_seps) != len(seps):
+        return False
+    return all(abs(a - b) <= tol for a, b in zip(page_seps, seps))
+
+
+def _leftmost_titled_column(words, seps, page_width, page_height):
+    """Индекс самой левой колонки с непустым заголовком, иначе None.
+
+    Служит запасным ответом на вопрос «где обозначение кабеля». Подписью эту
+    графу не опознать: бюро называют её "Обозначение кабеля, провода" (Енисей),
+    "№ кабеля" (ЭОМ) и "SB№ кабеля" (АК), причём у АК перенос режет слово на
+    "ка-" и "беля", так что не выживает даже корень. Зато МЕСТО у неё одно и то
+    же во всех трёх журналах - крайняя слева графа таблицы; нулевая колонка
+    (поле листа до первой вертикали) заголовка не имеет и потому отсеивается.
+
+    Ответ запасной: он берётся, только если подписи не опознали графу, и
+    перебить правильное сопоставление не может.
+    """
+    edges = [0.0] + [float(x) for x in seps] + [float(page_width)]
+    header_words = [w for w in words if w["top"] < page_height * 0.25]
+    for i, (lo, hi) in enumerate(zip(edges, edges[1:])):
+        if any(lo <= w["xc"] < hi for w in header_words):
+            return i
+    return None
+
+
 # Содержимое штампа, просочившееся в полосу строки: подписи граф («Дата»,
 # «Подп.», «Копировал») и голые даты «04.25». Такая "запись" - не канал и не
 # кабель, отбрасываем по значению ключевой ячейки.
@@ -250,13 +337,105 @@ SIGNAL_COLUMNS = [
 
 JOURNAL_COLUMNS = [
     ("cable",   ["обозначение"]),
-    ("from",    ["начало"]),
-    ("to",      ["конец"]),
+    ("from",    ["начало", "откуда"]),
+    ("to",      ["конец", "куда"]),
     ("segment", ["участок"]),
     ("brand",   ["марка"]),
     ("section", ["сечение", "количество кабелей"]),
     ("length",  ["длина"]),
 ]
+
+
+PARAM_COLUMNS = [
+    ("position",  ["позиция"]),
+    ("note",      ["наименование"]),
+    ("sheet_ref", ["лист схемы", "схемы"]),
+]
+
+# Род сигнала и его номинал в строке перечня: «СК НР =24В», «СК НЗ =24В».
+# Ищется по ВСЕЙ строке, а не по своей графе, сознательно: графы «Вход» и
+# «Выход» разбиты на десяток подколонок, шапка над ними набрана ПОВЁРНУТЫМ
+# текстом (pdfplumber отдаёт его задом наперёд - «еинавориврезеР»), и
+# сопоставлять их по заголовку значит гадать. Само значение при этом
+# однозначно: другой такой записи в строке нет.
+SIGNAL_SPEC_RE = re.compile(r"(СК\s*[НH][РPЗ3]?)?\s*([=~]\s*\d{1,3}\s*[ВVB])", re.I)
+
+# Шапка таблицы, повторённая на каждом листе, и графы штампа. Подзаголовком
+# раздела не являются, но графу «Позиция» тоже оставляют пустой.
+_PARAM_HEADER_RE = re.compile(
+    r"пределы\s+измерений|шкала\s+прибора|сигнализация\s+вход|примечание|"
+    r"разраб|провер|утверд|инв\.|\.внИ|теплотранссервис|"
+    r"стадия\s+лист|лист\s+листов", re.I)
+
+
+def extract_param_list(pdf_path):
+    """«Перечень входных/выходных параметров контроля, регулирования, управления».
+
+    Опросная таблица ГОСТ 21.408: № п/п, ПОЗИЦИЯ ПО СХЕМЕ, наименование
+    параметра, пределы измерений, функция, сигнализация, вход/выход, класс
+    точности, ЛИСТ СХЕМЫ, примечание.
+
+    Ценна она графой «Позиция по схеме»: там стоят позиции приборов (HL101,
+    NSF001, PZS PGmax) - тот же ключ, которым подписаны кабели в кабельном
+    журнале и приборы на ФСА. Другого документа, связывающего прибор с его
+    сигналом и листом схемы, в альбоме нет.
+
+    Строки-подзаголовки («Горелочное устройство», «Насосы воды котлового
+    контура HPA001») занимают всю ширину таблицы и позиции не имеют - они
+    запоминаются в section, как в extract_signal_list.
+    """
+    connections, section = [], None
+    with pdfplumber.open(pdf_path) as pdf:
+        seps = mapping = None
+        for page_no, page in enumerate(pdf.pages, start=1):
+            _progress.page(page_no, len(pdf.pages),
+                           stage="чтение перечня параметров")
+            words = _page_words(page)
+            page_seps = _vertical_separators(page)
+            if page_seps:
+                m, header_bottom = _map_alt_columns(
+                    words, page_seps, page.width, page.height, PARAM_COLUMNS)
+                if "position" in m:
+                    seps, mapping = page_seps, m
+                else:
+                    header_bottom = 40.0
+            else:
+                header_bottom = 40.0
+            if not seps or not mapping:
+                continue
+            # Лист чужой таблицы, подшитый в этот же документ (см. _same_layout).
+            if not _same_layout(page_seps, seps):
+                continue
+            for top, bottom in _row_bands(page, min_width=250):
+                if bottom <= header_bottom + 2:
+                    continue
+                cells = _cells(words, seps, page.width, top, bottom)
+                get = lambda f: (cells[mapping[f]] if f in mapping        # noqa: E731
+                                 and mapping[f] < len(cells) else "")
+                position = clean(get("position"))
+                if not position:
+                    # Строка без позиции - подзаголовок раздела: он один на всю
+                    # ширину таблицы, поэтому и опознаётся по пустой графе.
+                    # Нулевая колонка (№ п/п) в набор НЕ входит: в неё стекает
+                    # повёрнутый текст поля листа - обозначение документа задом
+                    # наперёд («1-1-2В1В-КА-150-42»), и оно приклеивалось к
+                    # названию раздела.
+                    text = clean(" ".join(c for c in cells[1:] if c))
+                    if (text and len(text) < 120 and not _ALT_JUNK_RE.match(text)
+                            and not _PARAM_HEADER_RE.search(text)):
+                        section = text
+                    continue
+                if _ALT_JUNK_RE.match(position):
+                    continue
+                spec = SIGNAL_SPEC_RE.search(" ".join(cells))
+                connections.append(_alt_record(
+                    len(connections) + 1, page_no,
+                    kks=position,
+                    note=clean(get("note")),
+                    section=section,
+                    sheet_ref=clean(get("sheet_ref")) or None,
+                    signal_spec=clean(spec.group(0)) if spec else None))
+    return connections
 
 
 def extract_signal_list(pdf_path):
@@ -280,6 +459,9 @@ def extract_signal_list(pdf_path):
             else:
                 header_bottom = 40.0
             if not seps or not mapping:
+                continue
+            # Лист чужой таблицы, подшитый в этот же документ (см. _same_layout).
+            if not _same_layout(page_seps, seps):
                 continue
             for top, bottom in _row_bands(page, min_width=250):
                 if bottom <= header_bottom + 2:
@@ -323,6 +505,11 @@ def extract_cable_journal(pdf_path):
             if page_seps:
                 m, header_bottom = _map_alt_columns(
                     words, page_seps, page.width, page.height, JOURNAL_COLUMNS)
+                if "cable" not in m and ("from" in m or "to" in m):
+                    first = _leftmost_titled_column(
+                        words, page_seps, page.width, page.height)
+                    if first is not None and first not in m.values():
+                        m["cable"] = first
                 if "cable" in m and ("from" in m or "to" in m):
                     seps, mapping = page_seps, m
                 else:
@@ -330,6 +517,9 @@ def extract_cable_journal(pdf_path):
             else:
                 header_bottom = 40.0
             if not seps or not mapping:
+                continue
+            # Лист чужой таблицы, подшитый в этот же документ (см. _same_layout).
+            if not _same_layout(page_seps, seps):
                 continue
             for top, bottom in _row_bands(page, min_width=600):
                 if bottom <= header_bottom + 2:
@@ -524,6 +714,8 @@ def build_document(pdf_path, meta_path=None, revisions_path=None):
 
     if table_kind == "signal_list":
         connections = extract_signal_list(pdf_path)
+    elif table_kind == "param_list":
+        connections = extract_param_list(pdf_path)
     elif table_kind == "cable_journal":
         connections = extract_cable_journal(pdf_path)
     else:

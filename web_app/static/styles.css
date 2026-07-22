@@ -205,6 +205,34 @@ main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
 .run-menu button span { color: var(--muted); font-size: 12px; }
 .run-menu button + button { border-top: 1px solid var(--line); }
 
+/* ---------- Выбор моделей нейросетей для сессии ---------- */
+.llm-box {
+  margin-top: 14px; border: 1px solid var(--line); border-radius: 7px;
+  background: var(--panel); font-size: 13px;
+}
+.llm-box > summary {
+  cursor: pointer; padding: 10px 12px; font-weight: 600; list-style: none;
+  display: flex; align-items: baseline; gap: 8px;
+}
+.llm-box > summary::-webkit-details-marker { display: none; }
+.llm-box > summary::before { content: "▸"; color: var(--muted); }
+.llm-box[open] > summary::before { content: "▾"; }
+.llm-summary { color: var(--muted); font-weight: 400; font-size: 12px; }
+.llm-body { padding: 4px 12px 12px; border-top: 1px solid var(--line); }
+.llm-body label {
+  display: block; margin-top: 10px; color: var(--muted); font-size: 12px;
+}
+.llm-body select {
+  display: block; width: 100%; margin-top: 4px; padding: 7px 8px;
+  border: 1px solid var(--line); border-radius: 6px; background: #fff;
+  color: var(--ink); font-size: 13px; font-family: inherit;
+}
+.llm-body select:disabled { background: var(--page); color: var(--muted); }
+.llm-note { color: var(--crit); font-size: 12px; margin-top: 8px; }
+.llm-note:empty { display: none; }
+.llm-hint { color: var(--muted); font-size: 12px; margin-top: 12px; }
+.llm-off { opacity: .5; }
+
 /* ---------- Статус-полоса ---------- */
 .status-bar {
   display: flex; align-items: center; gap: 10px; margin-top: 14px;

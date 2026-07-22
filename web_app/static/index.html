@@ -14,7 +14,7 @@
       <h1>Анализатор проектной документации</h1>
       <div class="sub">Проверка EPLAN-схем и таблиц подключений на ошибки</div>
     </div>
-    <span class="version-badge" id="version-badge">V1.9</span>
+    <span class="version-badge" id="version-badge">V2.0</span>
   </header>
 
   <main>
@@ -79,6 +79,44 @@
             <div class="file-note" id="file-note">Все документы сессии считаются
               одним проектом и сверяются между собой. Состав может быть любым: схема,
               сборочный чертёж, спецификация, нетлист — или только часть из них.</div>
+
+            <details class="llm-box" id="llm-box">
+              <summary>Модели нейросетей для этой сессии
+                <span class="llm-summary" id="llm-summary"></span></summary>
+              <div class="llm-body">
+                <div class="llm-note" id="llm-note"></div>
+
+                <label>Текстовых агентов
+                  <select id="llm-count">
+                    <option value="1">1 — анализирует одна модель</option>
+                    <option value="2">2 — две модели независимо, отчёты сшивает третья</option>
+                  </select>
+                </label>
+
+                <label id="llm-single-wrap">Какой агент работает
+                  <select id="llm-single">
+                    <option value="agent_1">Агент 1</option>
+                    <option value="agent_2">Агент 2</option>
+                  </select>
+                </label>
+
+                <label>Модель агента 1
+                  <select id="llm-agent1"></select>
+                </label>
+
+                <label>Модель агента 2
+                  <select id="llm-agent2"></select>
+                </label>
+
+                <label>Модель зрения (визуальный анализ схем)
+                  <select id="llm-vision"></select>
+                </label>
+
+                <div class="llm-hint">Пустой выбор — как в общем config.yaml.
+                  Настройка действует только на эту сессию и записывается в её
+                  config.yaml, поэтому потом всегда видно, чем считался отчёт.</div>
+              </div>
+            </details>
 
             <div class="run-wrap">
               <div class="split" style="width:100%">
@@ -184,7 +222,7 @@
 
     <footer class="app-footer">
       <b>ИНДУСТРИЯ МАНИПУЛЯТОР</b> · Анализатор проектной документации ·
-      <span id="footer-version">V1.9</span>
+      <span id="footer-version">V2.0</span>
     </footer>
   </main>
 

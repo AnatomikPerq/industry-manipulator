@@ -54,7 +54,7 @@ KIND_ENUM = [
 
 SEVERITY_ENUM = ["critical", "high", "medium", "low", "info"]
 
-DOC_TYPE_ENUM = ["netlist", "scheme", "assembly", "spec"]
+DOC_TYPE_ENUM = ["netlist", "scheme", "assembly", "spec", "functional"]
 
 # Одно место в одном документе. Все доменные поля опциональны (null, если
 # в этом документе такого поля нет или оно не распознано) - обязательны

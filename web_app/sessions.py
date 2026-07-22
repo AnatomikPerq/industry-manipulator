@@ -178,6 +178,9 @@ class SessionStore:
                 "n_findings": None,
                 "error": None,
                 "doc_types": {},
+                # выбранные для этой сессии модели и число агентов (см. set_llm);
+                # пусто = как в общем config.yaml
+                "llm": {},
                 # что считается прямо сейчас: "скрипты" | "очередь к ИИ" | "ИИ"
                 "stage": None,
                 # какой документ и какой его лист читает парсер (см. progress.py)
@@ -545,6 +548,71 @@ class SessionStore:
                 types.pop(key, None)        # пустой выбор - сброс пометки
             meta["doc_types"] = types
             self._write_meta(meta)
+
+    def set_llm(self, session_id, settings) -> dict:
+        """Выбор моделей и числа агентов ДЛЯ ЭТОЙ СЕССИИ.
+
+        Хранится в session.json рядом с пометками типов и по той же причине:
+        это свойство прогона, а не установки. Общий config.yaml от выбора в
+        интерфейсе не меняется - иначе один пользователь молча перенастраивал бы прогоны всех остальных, а разобраться потом, чем считался
+        позавчерашний отчёт, было бы нечем. Перед запуском настройки уезжают в
+        config.yaml СЕССИИ (_pipeline_runner.build_session_config), который
+        остаётся в её папке как часть архива прогона.
+
+        Пустое значение (null) означает «как в общем config.yaml», а не
+        «ничего»: так пользователь возвращает настройку по умолчанию, не зная,
+        какая она.
+
+        Существование модели на сервере здесь НЕ проверяется сознательно.
+        Сервер бывает временно выключен, а список моделей на нём меняется;
+        запретить сохранить выбор из-за того, что LM Studio сейчас не отвечает,
+        значило бы связать настройку с состоянием сети. Доступность показывает
+        кнопка проверки серверов, а прогон честно упадёт с понятной ошибкой.
+        """
+        if not isinstance(settings, dict):
+            raise SessionError("Ожидался объект настроек", 400)
+
+        clean = {}
+        for key in ("agent_1", "agent_2", "vision"):
+            if key not in settings:
+                continue
+            value = settings[key]
+            if value in (None, ""):
+                clean[key] = None
+                continue
+            if not isinstance(value, str) or len(value) > 200:
+                raise SessionError(f"Недопустимое имя модели для {key}", 400)
+            clean[key] = value.strip()
+
+        if "agents_count" in settings:
+            value = settings["agents_count"]
+            if value in (None, ""):
+                clean["agents_count"] = None
+            elif value in (1, 2, "1", "2"):
+                clean["agents_count"] = int(value)
+            else:
+                raise SessionError("Агентов может быть 1 или 2", 400)
+
+        if "single_agent" in settings:
+            value = settings["single_agent"]
+            if value in (None, ""):
+                clean["single_agent"] = None
+            elif value in ("agent_1", "agent_2"):
+                clean["single_agent"] = value
+            else:
+                raise SessionError("Единственный агент - agent_1 или agent_2", 400)
+
+        with self._lock:
+            meta = self._read_meta(session_id)
+            if meta["status"] in ACTIVE_STATUSES:
+                raise SessionError(
+                    "Сессия в очереди или выполняется - настройки менять нельзя", 409)
+            llm = dict(meta.get("llm") or {})
+            llm.update(clean)
+            llm = {k: v for k, v in llm.items() if v is not None}
+            meta["llm"] = llm
+            self._write_meta(meta)
+            return llm
 
     def has_files(self, session_id) -> bool:
         """Есть ли в сессии хоть что-то для анализа.

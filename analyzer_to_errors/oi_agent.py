@@ -28,6 +28,7 @@ from pathlib import Path
 
 from interpreter import OpenInterpreter
 
+import llm_client
 from llm_client import make_simple_ask_fn
 from schema import EXAMPLE_ERRORS, REPORT_SCHEMA
 from validation import JSONValidationError, get_validated_json
@@ -69,6 +70,22 @@ def _sane_token_limits(server_cfg: dict) -> tuple:
     context_window = server_cfg.get("context_window", 32000)
     max_tokens = server_cfg.get("max_tokens", 4096)
 
+    # ПРАВДА О КОНТЕКСТЕ - У СЕРВЕРА, А НЕ В КОНФИГЕ. context_window написан
+    # человеком и неизбежно расходится с тем, как модель загрузили в LM Studio:
+    # у qwythos-9b в конфиге 200000, а загружена она с 8192. Open Interpreter
+    # верит числу из конфига, считает по нему бюджет истории и отправляет
+    # больше, чем сервер принимает, - стадия агентов падает на первом же
+    # обращении простынёй из litellm ("request (9808 tokens) exceeds the
+    # available context size (8192 tokens)"), по которой причину не угадать.
+    real = llm_client.loaded_context_length(server_cfg)
+    if real and real < context_window:
+        logger.warning(
+            "Модель %s загружена на сервере с контекстом %d, а в config.yaml "
+            "указано %d. Считаю по реальному: иначе Open Interpreter отправит "
+            "больше, чем сервер примет, и прогон упадёт на первом же запросе.",
+            server_cfg.get("model"), real, context_window)
+        context_window = real
+
     cap = int(context_window * MAX_TOKENS_SHARE_OF_CONTEXT)
     if max_tokens > cap:
         logger.warning(
@@ -82,7 +99,39 @@ def _sane_token_limits(server_cfg: dict) -> tuple:
     return context_window, max_tokens
 
 
-def _build_interpreter(server_cfg: dict, helper_dir: str) -> OpenInterpreter:
+# Сколько символов приходится на токен. Оценка НАМЕРЕННО заниженная: считать
+# токены по-настоящему значило бы тащить токенизатор конкретной модели, а
+# ошибиться здесь в опасную сторону нельзя - перебор виден не как «отчёт чуть
+# короче», а как отказ сервера на весь запрос. Русский текст с BPE даёт 2.5-3
+# символа на токен, JSON схемы - больше; берём нижнюю границу.
+CHARS_PER_TOKEN = 2.5
+
+# Ниже этого протокол бессмысленно резать: в отчёт не попадёт ничего, кроме
+# обрывка. Значит, модель с таким контекстом для стадии отчёта не годится, и
+# сказать об этом надо прямо, а не слать заведомо обречённый запрос.
+MIN_TRANSCRIPT_CHARS = 2000
+
+
+def _transcript_budget(context_window: int, max_tokens: int, fixed_chars: int) -> int:
+    """Сколько символов протокола влезет в промпт отчёта.
+
+    Прежде протокол резался по константе в 60000 символов - числу, ни от чего
+    не зависящему. На модели, загруженной с контекстом 8192, это примерно
+    20000 токенов при доступных шести тысячах, и стадия отчёта падала с
+    «request (14365 tokens) exceeds the available context size (8192 tokens)»
+    сразу после того, как агент честно отработал пять минут и собрал факты.
+    """
+    room_tokens = context_window - max_tokens - 200      # 200 - служебная обвязка
+    return int(room_tokens * CHARS_PER_TOKEN) - fixed_chars
+
+
+def _build_interpreter(server_cfg: dict, helper_dir: str):
+    """Возвращает (interpreter, context_window, max_tokens).
+
+    Лимиты отдаются наружу, а не остаются внутри: по ним считается бюджет
+    протокола для стадии отчёта, а спрашивать сервер о контексте второй раз
+    ради тех же чисел незачем.
+    """
     context_window, max_tokens = _sane_token_limits(server_cfg)
 
     interp = OpenInterpreter()
@@ -97,7 +146,7 @@ def _build_interpreter(server_cfg: dict, helper_dir: str) -> OpenInterpreter:
     interp.llm.temperature = server_cfg.get("temperature", 0.2)
     interp.llm.max_tokens = max_tokens
     interp.llm.context_window = context_window
-    return interp
+    return interp, context_window, max_tokens
 
 
 # Промпт стадии 2 (отчёт). Уходит ОБЫЧНЫМ chat-вызовом, без Open Interpreter.
@@ -240,7 +289,7 @@ def run_analysis_agent(server_cfg: dict, input_dir: str, helper_dir: str,
     logger.info("Инициализация Open Interpreter для модели %s "
                 "(лимит ходов: %d, таймаут: %d c)",
                 server_cfg["model"], max_code_turns, timeout_seconds)
-    interp = _build_interpreter(server_cfg, helper_dir)
+    interp, context_window, max_tokens = _build_interpreter(server_cfg, helper_dir)
 
     logger.info("Стадия 1/2: исследование данных (исполнение кода)")
     transcript = _run_investigation(interp, input_dir, max_code_turns, timeout_seconds)
@@ -252,10 +301,30 @@ def run_analysis_agent(server_cfg: dict, input_dir: str, helper_dir: str,
             "Проверьте доступность модели: python main.py --check-llm")
 
     logger.info("Стадия 2/2: формирование отчёта (обычный chat, без исполнения кода)")
+    schema_json = json.dumps(REPORT_SCHEMA, ensure_ascii=False, indent=2)
+    examples_json = json.dumps({"errors": EXAMPLE_ERRORS}, ensure_ascii=False, indent=2)
+
+    # Протокол режем по РЕАЛЬНОМУ контексту модели, а не по константе.
+    fixed = len(REPORT_PROMPT_TEMPLATE) + len(schema_json) + len(examples_json)
+    budget = _transcript_budget(context_window, max_tokens, fixed)
+    if budget < MIN_TRANSCRIPT_CHARS:
+        raise JSONValidationError(
+            f"Модель {server_cfg['model']} загружена с контекстом {context_window} "
+            f"токенов - на отчёт не остаётся места даже под схему находки "
+            f"(нужно минимум ~{MIN_TRANSCRIPT_CHARS} символов протокола, "
+            f"доступно {budget}). Увеличьте контекст модели в LM Studio или "
+            f"выберите другую модель в настройках сессии.")
+    if len(transcript) > budget:
+        logger.warning(
+            "Протокол агента (%d символов) не влезает в контекст модели "
+            "(%d токенов) - оставляю последние %d символов: выводы и сводки "
+            "агент печатает в конце.", len(transcript), context_window, budget)
+        transcript = "... [начало протокола обрезано]\n\n" + transcript[-budget:]
+
     prompt = REPORT_PROMPT_TEMPLATE.format(
         transcript=transcript,
-        schema=json.dumps(REPORT_SCHEMA, ensure_ascii=False, indent=2),
-        examples=json.dumps({"errors": EXAMPLE_ERRORS}, ensure_ascii=False, indent=2),
+        schema=schema_json,
+        examples=examples_json,
     )
     return get_validated_json(
         make_simple_ask_fn(server_cfg), prompt, REPORT_SCHEMA,

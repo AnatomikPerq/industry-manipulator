@@ -29,6 +29,54 @@ VISION_RETRIES = 3
 RETRY_DELAY = 5.0
 
 
+def native_models_url(base_url: str) -> str:
+    """Нативный эндпоинт LM Studio: там видно, С КАКИМ контекстом модель
+    реально загружена. У OpenAI-совместимого /v1/models этого нет."""
+    root = str(base_url).rstrip("/")
+    if root.endswith("/v1"):
+        root = root[:-3]
+    return root + "/api/v1/models"
+
+
+def loaded_context_length(server_cfg: dict, timeout: float = 5.0):
+    """С каким контекстом модель ЗАГРУЖЕНА на сервере, или None.
+
+    ЗАЧЕМ. context_window в config.yaml - число, написанное человеком, и оно
+    неизбежно расходится с тем, как модель на самом деле загрузили в LM Studio.
+    Замер: у qwythos-9b в конфиге стоит 200000, а загружена она с 8192, и
+    стадия агентов умирала на первом же обращении - Open Interpreter верит
+    конфигу, считает по нему бюджет истории и отправляет 9808 токенов туда, где
+    принимают 8192. Ошибка при этом прилетает простынёй из litellm, по которой
+    догадаться о причине нельзя.
+
+    Спрашиваем сервер: он единственный знает правду. Не ответил - возвращаем
+    None и работаем по конфигу, как раньше: проверка доступности не должна
+    становиться условием запуска.
+    """
+    import json
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(native_models_url(server_cfg["base_url"]))
+        if server_cfg.get("api_key") and server_cfg["api_key"] != "not-needed":
+            req.add_header("Authorization", f"Bearer {server_cfg['api_key']}")
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = json.load(r)
+    except Exception as e:  # noqa: BLE001 - сервер недоступен, это не наше дело
+        logger.debug("Не удалось спросить контекст у сервера: %s", e)
+        return None
+
+    for m in data.get("models", []):
+        if m.get("key") != server_cfg.get("model"):
+            continue
+        for inst in m.get("loaded_instances") or []:
+            ctx = (inst.get("config") or {}).get("context_length")
+            if ctx:
+                return int(ctx)
+        return None
+    return None
+
+
 def make_client(server_cfg: dict) -> OpenAI:
     return OpenAI(
         base_url=server_cfg["base_url"],

@@ -130,6 +130,21 @@ _ARTICLE_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9./\-]{4,}|[A-Za-z0-9./\-]{5,}
 IEC_TERMINAL_RE = re.compile(
     r"^(?:\d{1,2}/[LT]\d|[LT]\d|A[12]|N|PE|PEN|\d{1,2}(?:NO|NC))$", re.I)
 
+# Подпись КАНАЛА модуля ПЛК: 'DI1'..'DI8', 'DO5', 'AI3', 'AO1', 'COM1', 'GND'.
+# Это вывод изделия, а не изделие: заказывают модуль целиком, и строки на
+# отдельный его канал в спецификации не будет никогда.
+#
+# От подписей вывода по МЭК выше отличается тем, что живёт и на чертеже, и на
+# схеме сразу - канал подписан и на картинке модуля, и в месте подключения, -
+# поэтому защита «обозначение найдено в ДВУХ документах» его не отсеивает.
+# Замер на «24-051-АК»: 19 находок «нарисовано, но не заказано» из 56 были
+# ровно такими (DI1..DI8, DO1..DO8, COM1, COM2).
+#
+# Буквенные коды по ГОСТ 2.710 сюда не попадают: устройство обозначается 'A',
+# реле 'K', выключатель 'Q', предохранитель 'F' - двухбуквенных 'DI'/'DO'/'AO'
+# среди кодов изделий нет.
+PLC_CHANNEL_RE = re.compile(r"^(?:DI|DO|AI|AO|COM|GND|VCC|VDC|\+V|0V)\d{0,3}$", re.I)
+
 # Номинал напряжения ('230VAC', '24VDC', '~230В') - подпись характеристики на
 # картинке изделия, а не артикул. Цифры в нём есть, и фильтр цифры его
 # пропускает - отсекаем по форме.
@@ -141,6 +156,67 @@ VOLTAGE_RE = re.compile(r"^~?\d{1,4}\s*(?:V|В|B)\s*(?:AC|DC)?$", re.I)
 # а вот надпись '230VAC' на типовой картинке реле спарена на КОС с 630
 # обозначениями - и до этого фильтра давала 320 ложных «разный артикул» из 322.
 MASS_CAPTION_MIN_DESIGNATORS = 25
+
+# Доля обозначений связки, которую обязана содержать одолженная спецификация
+# всего объекта, чтобы считаться описывающей ЭТОТ шкаф. Замер по трём альбомам:
+# подходящая спецификация - 55.6..100%, спецификация чужого раздела - ровно 0.0%
+# (двенадцать случаев из двенадцати). См. rule_designator_not_in_spec.
+PROJECT_WIDE_MIN_MATCH = 0.05
+
+
+# ============================================================
+# ХАРАКТЕРИСТИКИ ИЗДЕЛИЯ (номиналы)
+# ============================================================
+#
+# Единица измерения -> (вид характеристики, множитель к базовой единице).
+# Порядок в регулярке ниже - от ДЛИННОЙ к короткой: иначе "Вт" совпадёт как
+# "В", а "кА" как "А", и мощность 240 Вт станет напряжением 240 В.
+#
+# Раскладки перемешаны сознательно: бюро пишет "24В" кириллицей, "24V"
+# латиницей и "24B" латинской B - в одной и той же спецификации ЩСКЗ
+# встречаются все три ("24В, 10А, 240Вт" и "230V AC/DC" в соседних строках).
+CHARACTERISTIC_UNITS = [
+    ("кВт", "мощность", 1000.0), ("kW", "мощность", 1000.0),
+    ("мВт", "мощность", 0.001),
+    ("Вт", "мощность", 1.0), ("W", "мощность", 1.0),
+    ("кВА", "мощность", 1000.0), ("kVA", "мощность", 1000.0),
+    ("кА", "ток", 1000.0), ("kA", "ток", 1000.0),
+    ("мА", "ток", 0.001), ("mA", "ток", 0.001),
+    ("Ач", "ёмкость", 1.0), ("Ah", "ёмкость", 1.0),
+    ("кВ", "напряжение", 1000.0), ("kV", "напряжение", 1000.0),
+    ("мм2", "сечение", 1.0), ("мм²", "сечение", 1.0), ("mm2", "сечение", 1.0),
+    ("Гц", "частота", 1.0), ("Hz", "частота", 1.0),
+    ("А", "ток", 1.0), ("A", "ток", 1.0),
+    ("В", "напряжение", 1.0), ("V", "напряжение", 1.0), ("B", "напряжение", 1.0),
+]
+
+# Число, единица и необязательный род тока. "AC/DC" обязан входить в шаблон:
+# без него "24VDC" не совпадает вовсе (после "V" сразу идёт буква, и граница
+# слова не срабатывает), а именно так подписаны лампы на чертеже ЩСКЗ.
+CHARACTERISTIC_RE = re.compile(
+    r"(?<![\w,.])(\d{1,4}(?:[.,]\d{1,3})?)\s*("
+    + "|".join(re.escape(u) for u, _, _ in CHARACTERISTIC_UNITS)
+    + r")\s*(?:AC/DC|DC/AC|AC|DC)?(?![\wА-Яа-я])", re.I | re.U)
+
+_UNIT_LOOKUP = {u.lower(): (kind, mul) for u, kind, mul in CHARACTERISTIC_UNITS}
+
+
+def characteristics(*texts):
+    """{вид характеристики: множество значений} из произвольных подписей.
+
+    "Блок питания с функцией UPS, 24В, 10А, 240Вт" ->
+        {"напряжение": {24.0}, "ток": {10.0}, "мощность": {240.0}}
+
+    Значения приводятся к базовой единице, поэтому "6kA" и "6A" - РАЗНЫЕ
+    величины (6000 и 6), а "0,4кВ" и "400В" - одна и та же. Без приведения
+    отключающая способность автомата совпала бы с его номиналом.
+    """
+    out = defaultdict(set)
+    for text in texts:
+        for m in CHARACTERISTIC_RE.finditer(text or ""):
+            kind, mul = _UNIT_LOOKUP[m.group(2).lower()]
+            out[kind].add(round(float(m.group(1).replace(",", ".")) * mul, 4))
+    return dict(out)
 
 
 def _caption_articles(asm):
@@ -700,6 +776,28 @@ def rule_designator_not_in_spec(bundle, docs, loaded):
 
     spec_designators = {norm_designator(d)
                         for it in spec["items"] for d in it.get("designators", [])}
+    # Обозначения, названные в ТЕКСТЕ наименования, а не в графе «Позиция»
+    # (см. ниже, in_spec_text).
+    spec_name_tokens = text_tokens(it.get("name") for it in spec["items"])
+
+    # Спецификация ДРУГОГО РАЗДЕЛА проекта, одолженная связке по ошибке.
+    # У «24-051-АК» спецификаций всего объекта четыре - тепломеханических
+    # решений, газоснабжения, жидкого топливоснабжения и автоматизации, - и
+    # шкафу одалживается та, в которой больше строк. Ею оказалась
+    # тепломеханическая: в ней насосы и задвижки, а внутренностей щита
+    # (реле 14K2, каналов ПЛК DO5) нет и быть не может. Замер: 56 находок
+    # «нарисовано, но не заказано», все до одной ложные.
+    #
+    # Отличается такая спецификация не тем, что чего-то не хватает, а тем, что
+    # не совпадает НИЧЕГО. Замер по трём альбомам разделяет случаи начисто:
+    # у подходящей спецификации совпадает 55.6-100% обозначений связки, у
+    # чужой - РОВНО 0.0%, во всех двенадцати случаях. Порог стоит между
+    # группами с одиннадцатикратным запасом снизу.
+    if docs.get("spec", {}).get("project_wide"):
+        both = ({norm_designator(d) for d in asm["designator_index"]}
+                & set(scheme["device_tags"]))
+        if both and len(both & spec_designators) < PROJECT_WIDE_MIN_MATCH * len(both):
+            return []
 
     findings = []
     for des, info in sorted(asm["designator_index"].items()):
@@ -717,6 +815,11 @@ def rule_designator_not_in_spec(bundle, docs, loaded):
         # тот же капкан, что в rule_article_not_in_spec.
         if IEC_TERMINAL_RE.match(des_norm):
             continue
+        # Канал модуля ПЛК ('DI3', 'DO5', 'COM1') - тоже вывод, а не изделие,
+        # и защиту «нашлось в двух документах» он проходит: канал подписан и на
+        # чертеже, и на схеме. См. PLC_CHANNEL_RE.
+        if PLC_CHANNEL_RE.match(des_norm):
+            continue
         # Подпись-диапазон ('FU1-FU3'): спецификация хранит концы по одному
         # (FU1, FU2, FU3), и целиком такой ключ в ней не найдётся никогда.
         # Если ВСЕ части диапазона в спецификации есть - изделия заказаны.
@@ -724,6 +827,16 @@ def rule_designator_not_in_spec(bundle, docs, loaded):
             parts = [p for p in des_norm.split("-") if p]
             if parts and all(p in spec_designators for p in parts):
                 continue
+        # Обозначение НАЗВАНО в спецификации, но не в графе «Позиция», а внутри
+        # наименования: у «24-051-АК» есть строка «14K2, 15K2 Фиксатор SR20T,
+        # пластик, чёрный...» - позиции затекли в соседнюю графу, и по колонке
+        # «Позиция» строка выглядит безымянной. Изделие при этом ЗАКАЗАНО, и
+        # утверждать обратное нельзя.
+        #
+        # Молча гасить такое тоже нельзя: разбор столбцов мог ошибиться, и тогда
+        # заказано на самом деле другое. Поэтому находка остаётся, но как ВОПРОС
+        # инженеру - ровно тот случай, ради которого заведён REVIEW.
+        in_spec_text = des_norm in spec_name_tokens
         tag = scheme["device_tags"].get(des_norm)
         if not tag:
             continue                       # на схеме нет - правило молчит
@@ -731,10 +844,12 @@ def rule_designator_not_in_spec(bundle, docs, loaded):
         asm_sheets = info.get("sheets") or []
         sch_sheets = tag.get("sheets") or []
         findings.append(_finding(
-            kind="MISSING",
+            kind="REVIEW" if in_spec_text else "MISSING",
             scope="cross_document",
-            severity="high",
-            type_ru="Изделие с чертежа и схемы отсутствует в спецификации",
+            severity="low" if in_spec_text else "high",
+            type_ru=("Изделие названо в спецификации не в своей графе"
+                     if in_spec_text
+                     else "Изделие с чертежа и схемы отсутствует в спецификации"),
             refs=[
                 _ref(docs["spec"]["name"], "spec", "specification.json",
                      designator=des,
@@ -906,15 +1021,174 @@ def rule_article_mismatch(bundle, docs, loaded):
     return findings
 
 
+def _mass_caption_texts(asm):
+    """Подписи чертежа, спаренные с массой обозначений.
+
+    Тот же признак и тот же порог, что у _caption_articles, но по ЛЮБОЙ подписи
+    элемента, а не только по колонке артикула: номинал на типовой картинке
+    изделия ("230VAC" у каждого реле КОС - 630 обозначений) сюда попадает как
+    раз через label_text, и без этого фильтра каждое такое реле давало бы
+    «на чертеже 230 В, в спецификации 24 В».
+    """
+    by_text = defaultdict(set)
+    for el in asm["elements"]:
+        if el.get("pair_source") != "block":
+            continue
+        for text in (el.get("article"), el.get("label_text")):
+            if text:
+                by_text[text].add(norm_designator(el.get("designator")))
+    return {t for t, des in by_text.items()
+            if len(des) >= MASS_CAPTION_MIN_DESIGNATORS}
+
+
+def rule_characteristic_mismatch(bundle, docs, loaded):
+    """У ОДНОГО элемента в спецификации и на чертеже РАЗНЫЕ номиналы.
+
+    Это заказ не того изделия: в спецификации блок питания на 24 В, а на
+    чертеже у той же позиции подписано 36 В - значит либо закажут не то, либо
+    смонтируют не то. От rule_article_mismatch отличается тем, ЧТО сравнивается:
+    там номер изделия по каталогу, здесь - его электрическая характеристика.
+    Артикулы могут совпадать (одна серия), а номиналы разойтись, и наоборот.
+
+    Сравниваются только ОДНОИМЁННЫЕ величины и только приведённые к базовой
+    единице (см. characteristics): вольты с вольтами, амперы с амперами.
+
+    СРАБАТЫВАЕТ ТОЛЬКО НА НЕПЕРЕСЕКАЮЩИХСЯ МНОЖЕСТВАХ, а не на любом различии.
+    У изделия законно несколько номиналов одного вида: у реле катушка 24 В, а
+    контакты 250 В, и в спецификации написаны оба. Пока хоть одно значение
+    общее - расхождения нет; находка выдаётся, когда общих нет НИ ОДНОГО.
+
+    Источники - только спецификация и чертёж, и только подписи, спаренные с
+    обозначением В БЛОКЕ (pair_source='block'). Принципиальная схема сюда НЕ
+    входит, хотя номиналы на ней есть: привязать надпись к обозначению на схеме
+    можно только по радиусу, а это ровно тот механизм, на котором проверка
+    маркировки проводов дала 250 ложных срабатываний (см. schematic_rules,
+    заголовок «не вошло»). Для схемы этот вопрос решает стадия зрения.
+    """
+    spec, asm = loaded.get("spec"), loaded.get("assembly")
+    if not spec or not asm:
+        return []
+    if docs.get("spec", {}).get("project_wide"):
+        # Спецификация всего объекта описывает изделия десятка чужих шкафов;
+        # совпадение обозначений в ней случайно (1QF1 есть и в ЩС1, и в ШУПЧ1),
+        # и сравнивать их номиналы значит сравнивать разные аппараты.
+        return []
+
+    captions = _mass_caption_texts(asm)
+
+    by_designator = defaultdict(list)
+    for el in asm["elements"]:
+        if el.get("pair_source") != "block":
+            continue
+        texts = [t for t in (el.get("article"), el.get("label_text"))
+                 if t and t not in captions]
+        if texts:
+            # norm, а НЕ norm_designator: ключ обязан совпадать с тем, которым
+            # проиндексирована спецификация в _spec_rows_by_designator, иначе
+            # поиск строки молча не находит ничего.
+            by_designator[norm(el.get("designator"))].append((el, texts))
+
+    spec_rows = _spec_rows_by_designator(spec)
+
+    findings = []
+    for designator, entries in sorted(by_designator.items()):
+        rows = spec_rows.get(designator)
+        if not rows:
+            continue
+        row = rows[0]
+        spec_values = characteristics(row.get("name"), row.get("code"))
+        asm_values = characteristics(*[t for _, texts in entries for t in texts])
+
+        for kind in sorted(set(spec_values) & set(asm_values)):
+            here, there = spec_values[kind], asm_values[kind]
+            if here & there:
+                continue
+            el = entries[0][0]
+            findings.append(_finding(
+                "MISMATCH", "cross_document", "high",
+                f"разный номинал ({kind}) у одного элемента",
+                [_ref(docs["spec"]["name"], "spec", docs["spec"]["source"],
+                      row=row.get("row"), designator=designator,
+                      name=row.get("name"), found=_fmt_values(here, kind)),
+                 _ref(el.get("doc") or docs["assembly"]["name"], "assembly",
+                      docs["assembly"]["source"], sheet=el.get("sheet"),
+                      designator=designator, article=el.get("article"),
+                      found=_fmt_values(there, kind))],
+                f"У элемента {designator} {kind} в спецификации и на сборочном "
+                f"чертеже не совпадает: {_fmt_values(here, kind)} против "
+                f"{_fmt_values(there, kind)}.",
+                "Сверить с проектным решением, какой номинал верен, и привести "
+                "документы к одному: по спецификации изделие закупают, по "
+                "чертежу монтируют.",
+                f"спецификация, строка {row.get('row')}: {row.get('name')!r}; "
+                f"чертёж: {'; '.join(t for _, ts in entries for t in ts)!r}"))
+    return findings
+
+
+def _fmt_values(values, kind):
+    unit = {"напряжение": "В", "ток": "А", "мощность": "Вт",
+            "сечение": "мм²", "ёмкость": "А·ч", "частота": "Гц"}.get(kind, "")
+    return ", ".join(f"{v:g} {unit}".strip() for v in sorted(values))
+
+
 ALL_RULES = [
     rule_designation_mismatch,
     rule_article_mismatch,
+    rule_characteristic_mismatch,
     rule_article_not_in_spec,
     rule_designator_not_in_spec,
     rule_spec_element_not_on_assembly,
 ]
 
 SEVERITY_ORDER = _findings.SEVERITY_ORDER
+
+
+def _pick_project_wide_spec(docs, loaded):
+    """Из нескольких спецификаций объекта выбрать ту, что описывает ЭТОТ шкаф.
+
+    В альбоме «24-051-АК» спецификаций всего объекта четыре, по разделам
+    проекта: тепломеханических решений (441 строка), газоснабжения, жидкого
+    топливоснабжения и автоматизации. Главной по общему правилу (_doc_quality -
+    больше строк) становится тепломеханическая, а внутренности щитов лежат в
+    той, что про автоматизацию. Сверять щит с чужим разделом бессмысленно и
+    громко: замер - 56 находок «нарисовано, но не заказано», все ложные.
+
+    Выбираем по ОБОЗНАЧЕНИЯМ, а не по наименованию раздела: наименование -
+    привычка бюро, ровно та причина, по которой связку нельзя угадывать по
+    имени файла. Разделение по обозначениям при этом полное: подходящая
+    спецификация содержит 55.6-100% обозначений связки, чужая - ровно 0.0%.
+    """
+    entries = _doc_entries(docs, "spec")
+    if len(entries) < 2 or not docs["spec"].get("project_wide"):
+        return docs
+    asm, scheme = loaded.get("assembly"), loaded.get("scheme")
+    if not asm or not scheme:
+        return docs
+    # Ключи designator_index - СЫРЫЕ обозначения, а device_tags - уже
+    # свёрнутые (см. load_scheme). Без приведения пересечение пустое, и выбор
+    # молча не срабатывает.
+    both = ({norm_designator(d) for d in asm["designator_index"]}
+            & set(scheme["device_tags"]))
+    if not both:
+        return docs
+
+    best, best_hits = None, -1
+    for entry in entries:
+        spec = load_spec(entry["data_dir"])
+        if not spec:
+            continue
+        found = {norm_designator(d) for it in spec["items"]
+                 for d in it.get("designators", [])}
+        hits = len(both & found)
+        if hits > best_hits:
+            best, best_hits = entry, hits
+    if best is None or best is entries[0]:
+        return docs
+
+    docs = dict(docs)
+    docs["spec"] = dict(best, project_wide=True,
+                        extra=[e for e in entries if e is not best])
+    return docs
 
 
 def check_bundle(bundle, docs):
@@ -928,14 +1202,18 @@ def check_bundle(bundle, docs):
     Возвращает находки в формате schema.REPORT_SCHEMA.
     """
     loaded = {}
-    if docs.get("spec"):
-        # спецификации не объединяются: у связки она одна, а строки двух
-        # спецификаций с одинаковыми номерами перемешались бы в ссылках
-        loaded["spec"] = load_spec(docs["spec"]["data_dir"])
     if docs.get("assembly"):
         loaded["assembly"] = load_assembly_bundle(_doc_entries(docs, "assembly"))
     if docs.get("scheme"):
         loaded["scheme"] = load_scheme_bundle(_doc_entries(docs, "scheme"))
+    if docs.get("spec"):
+        # Спецификация выбирается ДО загрузки, но ПОСЛЕ чертежа и схемы: у
+        # полного проекта спецификаций объекта бывает несколько, по разделам,
+        # и какая из них описывает этот шкаф, видно только по обозначениям.
+        docs = _pick_project_wide_spec(docs, loaded)
+        # спецификации не объединяются: у связки она одна, а строки двух
+        # спецификаций с одинаковыми номерами перемешались бы в ссылках
+        loaded["spec"] = load_spec(docs["spec"]["data_dir"])
 
     # Пустое извлечение - не данные: правила читали бы его как «в документе
     # ничего нет» и штамповали ложные MISSING. Документ выбывает из сверки.

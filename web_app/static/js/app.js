@@ -20,6 +20,7 @@ import { createSession, deleteSession, cancelSession, refreshSessions,
          toggleNewSession } from "./list.js";
 import { cancelCurrent, closeRunMenu, enqueue, openSession, renameSession,
          stopSessionPolling, toggleRunMenu, uploadFiles } from "./session.js";
+import { bindLLM } from "./llm.js";
 import { closeFragments, downloadReportPdf, showReport } from "./report.js";
 import { $, esc, fetchJSON, fmtCtx, joinNonEmpty, logLine, showToast, showView }
   from "./util.js";
@@ -230,6 +231,7 @@ function bindEvents() {
 
   $("cancel-btn").addEventListener("click", cancelCurrent);
   $("btn-check-llm").addEventListener("click", checkLLM);
+  bindLLM();
   $("btn-show-report").addEventListener("click", showReport);
   $("btn-clear-console").addEventListener("click", () => { $("console").innerHTML = ""; });
   $("btn-report-pdf").addEventListener("click", downloadReportPdf);

@@ -31,6 +31,7 @@
     GET  /static/<file>                 - статика (logo, css, js)
     GET  /api/config                    - типы документов, версия, адрес сервера ИИ
     GET  /api/check-llm                 - какие модели ИИ загружены/доступны
+    GET  /api/models                    - список моделей сервера для выбора в интерфейсе
     GET  /api/sessions                  - список сессий + состояние очереди
     POST /api/sessions                  - создать сессию {name}
     GET  /api/sessions/<id>             - метаданные сессии + её файлы
@@ -39,6 +40,7 @@
     POST /api/sessions/<id>/upload      - дозагрузить файлы (multipart)
     POST /api/sessions/<id>/file-delete - удалить один файл {path}
     POST /api/sessions/<id>/set-type    - тип документа {name, type}
+    POST /api/sessions/<id>/set-llm     - модели и число агентов этой сессии
     POST /api/sessions/<id>/enqueue     - поставить на исполнение {mode}
     POST /api/sessions/<id>/cancel      - снять с очереди либо оборвать прогон
     GET  /api/sessions/<id>/log?since=N - лог прогона начиная со строки N,
@@ -77,7 +79,7 @@ import queue_worker                       # noqa: E402  (константы пу
 from queue_worker import AnalysisQueue    # noqa: E402
 from sessions import FULL_PROJECT_TYPE, SessionError, SessionStore  # noqa: E402
 
-PROJECT_VERSION = "V1.9"
+PROJECT_VERSION = "V2.0"
 
 # Content-Type для просмотра исходных документов сессии прямо в браузере.
 # PDF отдаём inline (вкладка откроет встроенный просмотрщик), книгу Excel -
@@ -112,6 +114,11 @@ DOC_TYPES = [
     # Под этим ключом живут ТРИ вида табличных документов - вид определяется
     # по заголовкам таблицы уже при извлечении (netlist_to_json.detect_table_kind),
     # выбирать между ними пользователю не нужно.
+    {"key": "functional", "title": "Функциональная схема автоматизации (ФСА)",
+     "hint": "Схема по ГОСТ 21.408: технологический процесс с приборами в кружках. "
+             "Электрической схемой не является — извлекаются позиции приборов "
+             "(PT206, TE303), которыми она сшивается с кабельным журналом и "
+             "перечнем параметров"},
     {"key": "netlist", "title": "Нетлист / табличный документ",
      "hint": "Таблица подключений (соединений) по ГОСТ, перечень входных/выходных "
              "сигналов ПЛК или кабельный журнал — вид таблицы распознаётся "
@@ -161,6 +168,64 @@ def _native_models_url(base_url):
     return root + "/api/v1/models"
 
 
+def _server_models(scfg):
+    """Модели одного сервера: имя, загружена ли, умеет ли смотреть картинки.
+
+    Берём НАТИВНЫЙ эндпоинт LM Studio, а не OpenAI-совместимый /v1/models:
+    последний отдаёт голый список имён, из которого не видно ни того, загружена
+    ли модель, ни того, есть ли у неё зрение. А выбирать модель зрения из списка,
+    где половина моделей картинок не видит, - значит предлагать пользователю
+    заведомо нерабочий вариант.
+    """
+    url = _native_models_url(scfg["base_url"])
+    req = urllib.request.Request(url)
+    if scfg.get("api_key") and scfg["api_key"] != "not-needed":
+        req.add_header("Authorization", f"Bearer {scfg['api_key']}")
+    with urllib.request.urlopen(req, timeout=8) as r:
+        data = json.load(r)
+
+    out = []
+    for m in data.get("models", []):
+        if m.get("type") != "llm":
+            continue                     # эмбеддинги агентом быть не могут
+        key = m.get("key")
+        caps = m.get("capabilities") or {}
+        out.append({
+            "key": key,
+            "display_name": m.get("display_name") or key,
+            "params": m.get("params_string"),
+            "max_context": m.get("max_context_length"),
+            "loaded": bool(m.get("loaded_instances")),
+            "vision": bool(caps.get("vision")),
+            "tool_use": bool(caps.get("trained_for_tool_use")),
+        })
+    out.sort(key=lambda m: (not m["loaded"], m["key"].lower()))
+    return out
+
+
+def _api_models_payload():
+    """Список моделей для выпадающих списков интерфейса + что выбрано сейчас."""
+    cfg = pipeline.load_config(_config_path())
+    servers = cfg["llm_servers"]
+    result = {
+        "models": [], "error": None,
+        "defaults": {
+            "agent_1": servers["agent_1"].get("model"),
+            "agent_2": servers["agent_2"].get("model"),
+            "vision": (servers.get("vision") or {}).get("model"),
+            "agents_count": cfg.get("agents", {}).get("count", 1),
+            "single_agent": cfg.get("agents", {}).get("single_agent", "agent_1"),
+        },
+    }
+    try:
+        result["models"] = _server_models(servers["agent_1"])
+    except Exception as e:  # noqa: BLE001
+        # Сервер не отвечает - это НЕ повод спрятать настройку: уже выбранное
+        # показать надо, а список просто останется пустым с честной причиной.
+        result["error"] = f"{type(e).__name__}: {e}"
+    return result
+
+
 def _check_llm():
     cfg = pipeline.load_config(_config_path())
     servers = cfg["llm_servers"]
@@ -176,25 +241,12 @@ def _check_llm():
     for base_url, scfg in bases.items():
         entry = {"base_url": base_url, "reachable": False, "models": [], "error": None}
         try:
-            url = _native_models_url(base_url)
-            req = urllib.request.Request(url)
-            if scfg.get("api_key") and scfg["api_key"] != "not-needed":
-                req.add_header("Authorization", f"Bearer {scfg['api_key']}")
-            with urllib.request.urlopen(req, timeout=8) as r:
-                data = json.load(r)
+            # Разбор ответа сервера один на обе кнопки: и на проверку моделей,
+            # и на выпадающие списки выбора. Две копии разъехались бы.
+            models = _server_models(scfg)
             entry["reachable"] = True
-            for m in data.get("models", []):
-                if m.get("type") != "llm":
-                    continue
-                key = m.get("key")
-                entry["models"].append({
-                    "key": key,
-                    "display_name": m.get("display_name") or key,
-                    "params": m.get("params_string"),
-                    "max_context": m.get("max_context_length"),
-                    "loaded": bool(m.get("loaded_instances")),
-                    "wanted": key in wanted,
-                })
+            for m in models:
+                entry["models"].append({**m, "wanted": m["key"] in wanted})
         except Exception as e:  # noqa: BLE001
             # запасной путь: OpenAI-совместимый /v1/models (без статуса загрузки)
             alive = check_server_alive(scfg)
@@ -271,6 +323,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._serve_static(path[len("/static/"):])
             if path == "/api/config":
                 return self._api_config()
+            if path == "/api/models":
+                return self._send_json(_api_models_payload())
             if path == "/api/check-llm":
                 return self._api_check_llm()
             if path == "/api/sessions":
@@ -329,6 +383,9 @@ class Handler(BaseHTTPRequestHandler):
                     STORE.set_type(session_id, rel_path, body.get("type"),
                                    VALID_TYPE_KEYS)
                     return self._send_json({"ok": True})
+                if action == "set-llm":
+                    llm = STORE.set_llm(session_id, self._body_json())
+                    return self._send_json({"ok": True, "llm": llm})
                 if action == "enqueue":
                     return self._api_enqueue(session_id)
                 if action == "cancel":

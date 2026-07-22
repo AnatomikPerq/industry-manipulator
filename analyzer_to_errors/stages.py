@@ -187,9 +187,16 @@ def _lend_project_wide_docs(groups: dict) -> None:
             continue
         if not any(t in docs for t in ("assembly", "scheme")):
             continue
+        # Одалживаются ВСЕ спецификации объекта, а не только главная по числу
+        # строк: у «24-051-АК» их четыре, по разделам проекта, и внутренности
+        # щитов лежат в спецификации автоматизации, тогда как самая толстая -
+        # тепломеханическая. Какая из них описывает этот шкаф, видно только по
+        # обозначениям, поэтому выбор делает сверка связки, где обозначения уже
+        # загружены (bundle_rules._pick_project_wide_spec).
         docs["spec"] = dict(common["spec"], project_wide=True)
-        logger.info("Связка %r: подключена общая спецификация объекта (%s)",
-                    bundle, common["spec"]["name"])
+        n_specs = 1 + len(common["spec"].get("extra") or [])
+        logger.info("Связка %r: подключены общие спецификации объекта (%d шт., "
+                    "главная - %s)", bundle, n_specs, common["spec"]["name"])
 
 
 def _doc_quality(doc_type: str, stats: dict) -> tuple:

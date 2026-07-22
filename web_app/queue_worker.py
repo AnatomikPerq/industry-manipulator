@@ -354,6 +354,9 @@ class AnalysisQueue:
             # уже приведены к ключам, которых ждёт ingest (относительно
             # base_files) - см. SessionStore.prepare_run
             "doc_types": doc_types or None,
+            # выбранные в интерфейсе модели и число агентов (SessionStore.set_llm);
+            # пусто - значит всё как в общем config.yaml
+            "llm": (self.store.get(session_id).get("llm") or None),
             **run_flags(mode),
             "clear_previous": True,
         }

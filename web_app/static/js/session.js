@@ -8,6 +8,7 @@
 import { DOC_TYPES, S, isBusy, resetSession, statusBadge } from "./state.js";
 import { cancelSession } from "./list.js";
 import { showReport } from "./report.js";
+import { renderLLM } from "./llm.js";
 import { $, askNotifyPermission, classifyLog, esc, fetchJSON, fmtSize, logLine,
          setStatus, showView } from "./util.js";
 
@@ -69,6 +70,7 @@ export async function loadSession() {
     "<span ", '<span id="crumb-status" ');
   renderFiles();
   renderSessionStatus();
+  renderLLM();
 }
 
 

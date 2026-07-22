@@ -59,6 +59,10 @@ TYPE_ALIASES = {
     "спецификация": "spec",
     "spec": "spec",
     "specification": "spec",
+    "functional": "functional",
+    "фса": "functional",
+    "функциональная": "functional",
+    "функциональная схема": "functional",
 }
 
 # Марка вида документа в имени файла -> тип документа.
@@ -132,6 +136,15 @@ DOC_TYPES = {
                        "обозначение + артикул), геометрия шкафа сознательно нет - "
                        "её сотни тысяч примитивов и для поиска ошибок она бесполезна.",
     },
+    "functional": {
+        "scripts": ["functional_scheme_to_data.py"],
+        "description": "Функциональная схема автоматизации (ФСА) по ГОСТ 21.408: "
+                       "технологический процесс с приборами в кружках по ГОСТ "
+                       "21.208. Извлекаются ПОЗИЦИИ приборов (PT206, TE303) - "
+                       "ключ сшивки с кабельным журналом и перечнем параметров. "
+                       "Проводов и клемм на ней нет, электрической схемой она "
+                       "не является.",
+    },
     "spec": {
         # Парсер выбирается по расширению (см. _scripts_for): книга Excel и
         # лист альбома - один и тот же документ по ГОСТ 21.110, но читаются
@@ -167,6 +180,7 @@ TYPE_SUFFIXES = {
     "scheme": {".pdf"},
     "netlist": {".pdf"},
     "assembly": {".pdf"},
+    "functional": {".pdf"},
     # .pdf у спецификации появился вместе с полными проектами: в альбоме она
     # такой же лист, как схема, и книги Excel к ней не прилагается.
     "spec": {".xlsx", ".xlsm", ".pdf"},
@@ -387,6 +401,12 @@ def _extraction_warnings(script: str, stats: dict, cumulative_stats: dict) -> li
             warnings.append("в спецификации не найдено обозначение документа - "
                             "сверка обозначений по связке будет неполной")
 
+    elif script == "functional_scheme_to_data.py":
+        if stats.get("functional_instruments", 0) == 0:
+            warnings.append("на функциональной схеме не найдено ни одной позиции "
+                            "прибора - вероятно, это скан (растр), а не векторный "
+                            "PDF, либо позиции подписаны не по ГОСТ 21.208")
+
     elif script == "assembly_drawing_to_data.py":
         if stats.get("assembly_elements", 0) == 0:
             warnings.append("на сборочном чертеже не найдено ни одной подписи элемента - "
@@ -522,6 +542,8 @@ def _extracted_nothing(doc_type: str, stats: dict) -> bool:
         return not stats.get("assembly_elements")
     if doc_type == "scheme":
         return not stats.get("graph_nodes") and not stats.get("nets")
+    if doc_type == "functional":
+        return not stats.get("functional_instruments")
     return False
 
 

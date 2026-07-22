@@ -76,17 +76,36 @@ def check_server_alive(server_cfg: dict, timeout: float = 10.0) -> dict:
         return {"ok": False, "error": f"{type(e).__name__}: {e}", "models": []}
 
 
+# Лимит ответа для пробного запроса. НЕ 32, и это замер: «думающая» модель
+# тратит на рассуждение весь отведённый лимит и возвращает ПУСТОЕ содержимое -
+# ровно то же, обо что споткнулось зрение (см. VISION_MAX_TOKENS_CEILING в
+# llm_client.py). На qwythos-9b при 32 токенах проба печатала
+# «[OK] модель отвечает за 15.0 c: ''» - утверждение, прямо противоречащее
+# тому, что рядом же и показано. Один пробный запрос на 2048 токенов дешёв.
+PROBE_MAX_TOKENS = 2048
+
+
 def check_model_responds(server_cfg: dict) -> dict:
     """Минимальный chat-запрос: модель реально грузится и отвечает."""
-    ask = make_simple_ask_fn({**server_cfg, "max_tokens": 32})
+    ask = make_simple_ask_fn({**server_cfg, "max_tokens": PROBE_MAX_TOKENS})
     t0 = time.time()
     try:
-        text = ask("Ответь одним словом: ок")
-        return {"ok": True, "seconds": round(time.time() - t0, 1),
-                "reply": (text or "").strip()[:60]}
+        text = (ask("Ответь одним словом: ок") or "").strip()
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "seconds": round(time.time() - t0, 1),
                 "error": _short_error(e)}
+
+    if not text:
+        # Пустой ответ - это ОТКАЗ, а не «модель работает». Главное правило
+        # проекта: не сумели проверить - так и говорим, а не молчим.
+        return {
+            "ok": False, "seconds": round(time.time() - t0, 1),
+            "error": (f"модель вернула ПУСТОЙ ответ (лимит {PROBE_MAX_TOKENS} "
+                      "токенов). Обычно это думающая модель: рассуждение съело "
+                      "весь лимит, а содержимого не осталось. Для анализа она "
+                      "годится только с большим max_tokens в config.yaml"),
+        }
+    return {"ok": True, "seconds": round(time.time() - t0, 1), "reply": text[:60]}
 
 
 def check_json_contract(server_cfg: dict, max_attempts: int = 3) -> dict:
