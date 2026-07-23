@@ -6,7 +6,42 @@
   <title>ИНДУСТРИЯ МАНИПУЛЯТОР — Анализатор проектной документации</title>
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
+<body class="unauthed">
+  <!-- ============ ЭКРАН ВХОДА ============ -->
+  <!-- Показывается, пока в body класс unauthed; app.js снимает его после входа.
+       Класс стоит уже в разметке, чтобы приложение не мелькнуло до проверки. -->
+  <div id="view-auth" class="auth-screen">
+    <div class="auth-card">
+      <img class="auth-logo" src="/static/logo.png" alt="Логотип ИНДУСТРИЯ МАНИПУЛЯТОР">
+      <div class="auth-brand">ИНДУСТРИЯ МАНИПУЛЯТОР</div>
+      <h1 class="auth-title">Анализатор проектной документации</h1>
+      <p class="auth-desc">Офлайн-проверка комплекта документов на шкаф управления —
+        принципиальных схем, сборочных чертежей, спецификаций и таблиц подключений.
+        Находит ошибки между документами: изделие нарисовано, но не заказано; разные
+        артикулы; чужое обозначение в штампе.</p>
+
+      <form id="auth-form" class="auth-form" autocomplete="on">
+        <label class="auth-label" for="auth-login">Логин</label>
+        <input id="auth-login" class="auth-input" type="text" maxlength="64"
+               placeholder="Введите ваш логин" autocomplete="username"
+               autocapitalize="off" spellcheck="false">
+
+        <div id="auth-pass-wrap" class="auth-pass hidden">
+          <label class="auth-label" for="auth-pass">Пароль администратора</label>
+          <input id="auth-pass" class="auth-input" type="password" maxlength="200"
+                 placeholder="Пароль" autocomplete="current-password">
+        </div>
+
+        <div id="auth-msg" class="auth-msg"></div>
+        <button id="auth-submit" class="auth-btn" type="submit">Войти</button>
+        <button id="auth-back" class="auth-link hidden" type="button">← ввести другой логин</button>
+      </form>
+
+      <div class="auth-foot">Первый раз? Введите логин — если такого ещё нет,
+        предложим зарегистрировать нового пользователя.</div>
+    </div>
+  </div>
+
   <header>
     <img class="logo" src="/static/logo.png" alt="Логотип ИНДУСТРИЯ МАНИПУЛЯТОР">
     <div class="header-titles">
@@ -14,7 +49,10 @@
       <h1>Анализатор проектной документации</h1>
       <div class="sub">Проверка EPLAN-схем и таблиц подключений на ошибки</div>
     </div>
-    <span class="version-badge" id="version-badge">V2.0</span>
+    <div class="header-right">
+      <div class="user-area" id="user-area"></div>
+      <span class="version-badge" id="version-badge">V2.1 beta</span>
+    </div>
   </header>
 
   <main>
@@ -23,7 +61,8 @@
       <section class="card">
         <div class="card-head">
           <span class="accent"></span><h2>Сессии анализа</h2>
-          <button class="btn-primary head-action" id="btn-new-session">Новая сессия</button>
+          <button class="btn head-action" id="btn-chat">💬 Чат с ИИ</button>
+          <button class="btn-primary" id="btn-new-session">Новая сессия</button>
         </div>
         <div class="card-body">
           <div class="new-session hidden" id="new-session">
@@ -36,10 +75,10 @@
           <div class="session-list" id="session-list"></div>
           <div class="file-empty" id="session-empty">Сессий пока нет.
             Создайте первую — она станет вашим комплектом документов на проверку.</div>
-          <div class="hint-text">Сессии общие для всех: любой сотрудник видит чужие,
-            может открыть отчёт и снять сессию с очереди. Скриптовая часть анализа
-            запускается сразу и считается параллельно; в очередь сессия встаёт
-            только перед стадией нейросетей — сервер ИИ один на всех.</div>
+          <div class="hint-text">Здесь ваши сессии: их видите только вы
+            (администратор — все, с группировкой по пользователям). Скриптовая
+            часть анализа запускается сразу и считается параллельно; в очередь
+            сессия встаёт только перед стадией нейросетей — сервер ИИ один на всех.</div>
         </div>
       </section>
     </div>
@@ -206,6 +245,77 @@
       </section>
     </div>
 
+    <!-- ============ ЭКРАН 3: ОБЫЧНЫЙ ЧАТ С ИИ ============ -->
+    <div id="view-chat" class="view">
+      <div class="crumbs">
+        <a href="#/" id="chat-back">← Все сессии</a>
+        <span class="crumb-sep">/</span>
+        <span class="crumb-name">Чат с нейросетью</span>
+      </div>
+
+      <section class="card chat-card">
+        <div class="card-head">
+          <span class="accent"></span><h2>Чат с нейросетью</h2>
+          <button class="btn head-action" id="chat-new">Новый чат</button>
+        </div>
+        <div class="card-body chat-shell">
+          <div class="chat-modelbar">
+            <label class="chat-model-label">Модель
+              <select id="chat-model"></select>
+            </label>
+            <div class="chat-model-note" id="chat-model-note"></div>
+          </div>
+
+          <div class="chat-messages" id="chat-messages"></div>
+
+          <div class="chat-pending" id="chat-pending"></div>
+          <div class="chat-attach-note" id="chat-attach-note"></div>
+
+          <div class="chat-inputbar">
+            <button class="btn chat-attach-btn" id="chat-attach"
+                    title="Приложить файлы и фото">📎</button>
+            <textarea id="chat-input" rows="1"
+                      placeholder="Напишите сообщение…  (Enter — отправить, Shift+Enter — перенос строки)"></textarea>
+            <button class="btn-primary" id="chat-send">Отправить</button>
+            <input type="file" id="chat-file-input" multiple hidden>
+          </div>
+
+          <div class="hint-text">Диалог обращается к LM Studio напрямую, минуя
+            очередь анализа. Доступны только модели, ЗАГРУЖЕННЫЕ в память сервера.
+            Файлы и фото передаются модели: картинки — как изображения (нужна
+            модель со «зрением»), прочие файлы — извлечённым из них текстом.
+            «Новый чат» закрывает текущий (он уходит в архив на диске).</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ (только администратору) -->
+    <div class="users-modal" id="users-modal">
+      <div class="users-window">
+        <div class="users-bar">
+          <div>
+            <div class="users-title">Пользователи</div>
+            <div class="users-note">Обычному пользователю нужен только логин.
+              Администратор видит все сессии и управляет пользователями — ему нужен пароль.</div>
+          </div>
+          <button class="btn btn-ghost" id="users-close">Закрыть</button>
+        </div>
+        <div class="users-body" id="users-list"></div>
+        <form class="users-add" id="users-add-form">
+          <div class="users-add-title">Добавить пользователя</div>
+          <div class="users-add-row">
+            <input id="nu-login" type="text" maxlength="64" placeholder="Логин"
+                   autocapitalize="off" spellcheck="false">
+            <label class="nu-admin"><input type="checkbox" id="nu-admin"> администратор</label>
+            <input id="nu-pass" type="text" maxlength="200"
+                   placeholder="Пароль (для администратора)" class="hidden">
+            <button class="btn-primary" type="submit">Добавить</button>
+          </div>
+          <div class="users-add-msg" id="nu-msg"></div>
+        </form>
+      </div>
+    </div>
+
     <!-- ФРАГМЕНТ ЧЕРТЕЖА У НАХОДКИ -->
     <div class="frag-modal" id="frag-modal">
       <div class="frag-window">
@@ -222,7 +332,7 @@
 
     <footer class="app-footer">
       <b>ИНДУСТРИЯ МАНИПУЛЯТОР</b> · Анализатор проектной документации ·
-      <span id="footer-version">V2.0</span>
+      <span id="footer-version">V2.1 beta</span>
     </footer>
   </main>
 

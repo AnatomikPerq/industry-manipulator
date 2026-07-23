@@ -15,8 +15,8 @@ main.py собирает их обратно как PROJECT_ROOT / doc["data_dir
 захочется вынести сессии на другой диск - сначала чинить эти три места в
 ingest.py, а не менять SESSIONS_DIR здесь.
 
-Раскладка:
-    analyzer_to_errors/sessions/<id>/
+Раскладка - У КАЖДОГО ВЛАДЕЛЬЦА СВОЯ ПАПКА:
+    analyzer_to_errors/sessions/<владелец>/<id>/
         session.json    - метаданные и статус (единственный источник правды)
         config.yaml     - конфиг прогона: копия базового с путями этой сессии
         log.txt         - лог прогона (append-only, отдаётся браузеру по смещению)
@@ -27,10 +27,29 @@ ingest.py, а не менять SESSIONS_DIR здесь.
             <имя документа>/                - извлечённые данные
         output/merged_report.json
 
-Аутентификации нет и поля «автор» нет сознательно: инструмент корпоративный,
-любой сотрудник создаёт сессии и видит чужие (в т.ч. может отменить и удалить).
+У сессии ЕСТЬ ВЛАДЕЛЕЦ (поле owner - канонический логин из users.py). Человек
+видит и трогает только свои сессии; администратор видит и трогает все. Само
+разграничение делает web_app (server.py) при обращении к эндпоинтам - хранилище
+лишь хранит owner и умеет отдать бесхозные сессии администратору (assign_ownerless).
+
+ПАПКА ВЛАДЕЛЬЦА - ТОЛЬКО РАСКЛАДКА НА ДИСКЕ (чтобы в проводнике было видно, чьи
+сессии), а НЕ адресация: id по-прежнему уникален и владельца в себе не несёт.
+Поэтому сессию ищем по id в обеих раскладках (_locate): новые лежат вложенно, а
+СТАРЫЕ, созданные до этой правки, остаются ПЛОСКО в sessions/<id>/ и не
+переезжают. Переезд молча сломал бы их: manifest.json хранит пути документов
+через relative_to(PROJECT_ROOT) (sessions/<id>/data/...), и после переноса
+фрагменты чертежа и повторный прогон искали бы данные по старому пути. Обе
+раскладки живут рядом без конфликта: имя папки владельца - это логин, а он
+никогда не совпадает с форматом id (_ID_RE), см. users._reject_unsafe_login.
+
+ПОЧЕМУ СЕССИИ ЛЕЖАТ ВНУТРИ analyzer_to_errors/ (и папка владельца тоже): ingest.py
+пишет пути документов через relative_to(PROJECT_ROOT), а main.py собирает их как
+PROJECT_ROOT / doc["data_dir"]. Вложенность на это не влияет - relative_to просто
+даёт путь на уровень глубже, - но вынести сессии ЗА analyzer_to_errors по-прежнему
+нельзя: уронит извлечение невнятным ValueError.
 """
 
+import hashlib
 import json
 import os
 import re
@@ -100,13 +119,85 @@ class SessionStore:
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        # Кэш id -> папка сессии. Сессия адресуется по id, а на диске лежит либо
+        # вложенно (sessions/<владелец>/<id>), либо плоско (старые). Поиск по id
+        # (_locate) обходит папки владельцев, поэтому его результат кэшируем:
+        # dir_of зовётся на каждый paths_of, а тот - почти на каждый запрос.
+        self._dir_cache = {}
 
     # ---------- пути ----------
+
+    @staticmethod
+    def _is_plain_segment(name) -> bool:
+        """Годится ли строка как имя папки владельца КАК ЕСТЬ (без хэширования).
+
+        Отсекает всё, что либо небезопасно как имя папки (обход каталога,
+        зарезервированные имена устройств Windows, точки/пробелы по краям), либо
+        спутало бы папку владельца с папкой сессии (формат id). Логины,
+        прошедшие users._reject_unsafe_login, сюда проходят целиком - остальное
+        (руками правленый owner, легаси) уедет в хэш."""
+        if not name or "/" in name or "\\" in name:
+            return False
+        if name != name.strip() or name.startswith(".") or name.endswith("."):
+            return False
+        if name.strip(". ") == "" or name == "_ownerless":
+            return False
+        if _ID_RE.match(name):
+            return False
+        base = name.split(".", 1)[0].lower()
+        reserved = {"con", "prn", "aux", "nul"} | {f"com{i}" for i in range(1, 10)} \
+            | {f"lpt{i}" for i in range(1, 10)}
+        return base not in reserved
+
+    @classmethod
+    def _owner_dirname(cls, owner) -> str:
+        """Имя папки для владельца. Читаемое для нормального логина, безопасное
+        для любого: непроходное имя заменяется хэшем (папку всё равно можно
+        создать, а сессия не теряется - её всё равно ищут по id)."""
+        name = (owner or "").strip()
+        if not name:
+            return "_ownerless"
+        if cls._is_plain_segment(name):
+            return name
+        return "user_" + hashlib.sha1(name.encode("utf-8")).hexdigest()[:12]
+
+    def _locate(self, session_id) -> Path:
+        """Папка существующей сессии по id либо None. Сначала плоско (старые
+        сессии), затем во всех папках владельцев. Признак сессии - её
+        session.json, а не просто каталог: так папку владельца (в ней лежат
+        сессии, но своего session.json у неё нет) не примешь за сессию."""
+        flat = self.root / session_id
+        if (flat / "session.json").is_file():
+            return flat
+        for owner_dir in self.root.iterdir():
+            if owner_dir.is_dir():
+                cand = owner_dir / session_id
+                if (cand / "session.json").is_file():
+                    return cand
+        return None
 
     def dir_of(self, session_id) -> Path:
         if not valid_id(session_id):
             raise SessionError(f"Некорректный идентификатор сессии: {session_id}", 400)
-        return self.root / session_id
+        with self._lock:
+            # Кэшу доверяем БЕЗУСЛОВНО (без проверки, что папка уже на диске):
+            # create кладёт сюда путь ещё до того, как создаст саму папку и
+            # session.json, - иначе тот же dir_of, зовущийся из create через
+            # paths_of, вернул бы плоский путь и сессия легла бы мимо папки
+            # владельца. Устаревшая запись (сессию удалили) не опасна: её из
+            # кэша вычищает delete, а промах по несуществующей упрётся в 404 при
+            # чтении session.json, а не выдаст левый путь.
+            cached = self._dir_cache.get(session_id)
+            if cached is not None:
+                return cached
+            found = self._locate(session_id)
+            if found is not None:
+                self._dir_cache[session_id] = found
+                return found
+            # Не найдена нигде: плоский путь по умолчанию. Запрос к
+            # несуществующей сессии всё равно упрётся в 404 при чтении её
+            # session.json - невнятного пути наружу не уйдёт.
+            return self.root / session_id
 
     def paths_of(self, session_id) -> dict:
         """Абсолютные пути сессии - ровно те, что уезжают в paths её config.yaml."""
@@ -155,19 +246,35 @@ class SessionStore:
 
     # ---------- жизненный цикл ----------
 
-    def create(self, name=None) -> dict:
-        """Создаёт пустую сессию в статусе draft и возвращает её метаданные."""
+    def create(self, name=None, owner=None, owner_display=None) -> dict:
+        """Создаёт пустую сессию в статусе draft и возвращает её метаданные.
+
+        owner - канонический логин владельца (из users.canon), он же уходит в
+        поле owner. Пусто (None) бывает у сессий, созданных до появления
+        пользователей; их забирает администратор (assign_ownerless).
+
+        owner_display - как назвать ПАПКУ владельца на диске: отображаемый логин
+        читабельнее канонического ("Иванов" вместо "иванов"). На адресацию не
+        влияет (сессию всё равно ищут по id), поэтому расхождение регистра
+        безопасно; по умолчанию - сам owner.
+        """
         with self._lock:
             # id читается глазами в проводнике и сортируется как строка;
             # хвост из uuid - на случай двух сессий в одну секунду
             session_id = "{}_{}".format(
                 time.strftime("%Y-%m-%d_%H-%M-%S"), uuid.uuid4().hex[:4])
+            # Папку владельца выбираем ЗДЕСЬ и сеем в кэш до paths_of: иначе
+            # dir_of вернул бы плоский путь по умолчанию и сессия легла бы не в
+            # папку владельца.
+            self._dir_cache[session_id] = (
+                self.root / self._owner_dirname(owner_display or owner) / session_id)
             paths = self.paths_of(session_id)
             for key in ("base_files_dir", "full_projects_dir", "helper_scripts_dir", "output_dir"):
                 paths[key].mkdir(parents=True, exist_ok=True)
             meta = {
                 "id": session_id,
                 "name": (name or "").strip() or "Без названия",
+                "owner": owner or None,
                 "status": "draft",
                 "mode": None,
                 "created_at": time.time(),
@@ -193,6 +300,26 @@ class SessionStore:
         with self._lock:
             return self._read_meta(session_id)
 
+    def owner_of(self, session_id):
+        """Владелец сессии (канонический логин) либо None у бесхозной. Бросает
+        SessionError(404), если сессии нет - это и есть проверка существования
+        перед разграничением доступа в server.py."""
+        return self._read_meta(session_id).get("owner")
+
+    def assign_ownerless(self, owner) -> int:
+        """Разовая передача всех бесхозных сессий владельцу (по замыслу -
+        администратору). Идемпотентно: сессию с уже проставленным owner
+        пропускает. Возвращает число переданных."""
+        if not owner:
+            return 0
+        with self._lock:
+            n = 0
+            for meta in self.list():
+                if not meta.get("owner"):
+                    self.update(meta["id"], owner=owner)
+                    n += 1
+            return n
+
     def update(self, session_id, **fields) -> dict:
         """Точечно меняет поля session.json. Пишет целиком - файл крошечный."""
         with self._lock:
@@ -203,18 +330,33 @@ class SessionStore:
 
     def list(self) -> list:
         """Все сессии, новые сверху. Битые папки просто пропускаем: сессия -
-        это папка на диске, её могли скопировать/удалить руками."""
+        это папка на диске, её могли скопировать/удалить руками.
+
+        Обходим ДВА уровня: сессия лежит либо плоско (sessions/<id>, старые),
+        либо в папке владельца (sessions/<владелец>/<id>). Папка владельца сама
+        по себе не сессия (у неё нет session.json) - в неё спускаемся. Заодно
+        освежаем кэш путей: тот же обход, что и для локатора, но разом на всех."""
         with self._lock:
             out = []
-            for d in self.root.iterdir():
-                if not d.is_dir() or not valid_id(d.name):
+            for entry in self.root.iterdir():
+                if not entry.is_dir():
                     continue
-                try:
-                    out.append(self._read_meta(d.name))
-                except SessionError:
-                    continue
+                if valid_id(entry.name) and (entry / "session.json").is_file():
+                    self._collect_session(entry, out)      # плоская (старая)
+                elif not valid_id(entry.name):
+                    for sub in entry.iterdir():             # папка владельца
+                        if (sub.is_dir() and valid_id(sub.name)
+                                and (sub / "session.json").is_file()):
+                            self._collect_session(sub, out)
             out.sort(key=lambda m: m.get("created_at") or 0, reverse=True)
             return out
+
+    def _collect_session(self, session_dir: Path, out: list) -> None:
+        self._dir_cache[session_dir.name] = session_dir
+        try:
+            out.append(self._read_meta(session_dir.name))
+        except SessionError:
+            pass    # битая сессия - пропускаем, как и раньше
 
     def delete(self, session_id) -> None:
         with self._lock:
@@ -222,7 +364,19 @@ class SessionStore:
             if meta["status"] in ACTIVE_STATUSES:
                 raise SessionError(
                     "Сессия в очереди или выполняется - сначала отмените её", 409)
-            shutil.rmtree(self.dir_of(session_id), ignore_errors=True)
+            d = self.dir_of(session_id)
+            shutil.rmtree(d, ignore_errors=True)
+            self._dir_cache.pop(session_id, None)
+            # Опустевшую папку владельца убираем, чтобы в проводнике не копились
+            # пустые каталоги ушедших сессий. Плоскую (root) не трогаем.
+            parent = d.parent
+            if parent != self.root and parent.is_dir():
+                try:
+                    next(parent.iterdir())
+                except StopIteration:
+                    parent.rmdir()
+                except OSError:
+                    pass
 
     def rename(self, session_id, name) -> dict:
         name = (name or "").strip()

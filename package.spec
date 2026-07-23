@@ -38,7 +38,11 @@ ANALYZER_MODULES = [
     "report_pdf", "full_project", "visual_stage", "tiling",
 ]
 
-WEB_MODULES = ["paths", "sessions", "queue_worker", "multipart", "_pipeline_runner"]
+# chat_llm импортируется ЛЕНИВО внутри обработчика чата (тянет openai/fitz) -
+# статический анализ его обычно ловит, но перечисляем явно, как и остальные
+# web-модули: гарантия важнее, чем «скорее всего найдёт».
+WEB_MODULES = ["paths", "sessions", "users", "queue_worker", "multipart",
+               "_pipeline_runner", "chats", "chat_llm"]
 
 # Open Interpreter крутит цикл "модель пишет код" и импортирует свои языковые
 # runner'ы (core/computer/terminal/languages/*) обычными import-ами - обычный

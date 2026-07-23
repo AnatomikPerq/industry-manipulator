@@ -13,6 +13,18 @@ import { esc } from "./util.js";
 // на которой мы остановились (лог тянем порциями, а не целиком).
 export const S = { id: null, meta: null, files: [], logNext: 0 };
 
+// Текущий вошедший пользователь: {login, canonical, is_admin} либо null.
+// Мутируется на месте, как и S: модули импортируют объект один раз.
+export const USER = { login: null, canonical: null, is_admin: false };
+
+export function setUser(u) {
+  Object.assign(USER, {
+    login: u ? u.login : null,
+    canonical: u ? u.canonical : null,
+    is_admin: !!(u && u.is_admin),
+  });
+}
+
 export function resetSession(id) {
   Object.assign(S, { id, meta: null, files: [], logNext: 0, report: null });
 }

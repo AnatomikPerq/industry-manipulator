@@ -15,22 +15,65 @@
    привязка событий - то, что связывает экраны между собой.
    ============================================================ */
 
-import { DOC_TYPES, S, setDocTypes } from "./state.js";
+import { DOC_TYPES, S, USER, setDocTypes, setUser } from "./state.js";
 import { createSession, deleteSession, cancelSession, refreshSessions,
          toggleNewSession } from "./list.js";
 import { cancelCurrent, closeRunMenu, enqueue, openSession, renameSession,
          stopSessionPolling, toggleRunMenu, uploadFiles } from "./session.js";
 import { bindLLM } from "./llm.js";
+import { openChat, stopChat } from "./chat.js";
 import { closeFragments, downloadReportPdf, showReport } from "./report.js";
-import { $, esc, fetchJSON, fmtCtx, joinNonEmpty, logLine, showToast, showView }
-  from "./util.js";
+import { hideAuth, initAuthScreen, logout, showAuth, whoAmI } from "./auth.js";
+import { initUsers, openUsers } from "./users.js";
+import { $, esc, fetchJSON, fmtCtx, joinNonEmpty, logLine, setUnauthorizedHandler,
+         showToast, showView } from "./util.js";
 
 // поллинг открытой сессии и списка живёт в своих модулях; здесь только
 // таймеры, которые роутер обязан гасить при смене экрана
 let listTimer = null;
 let watchTimer = null;
+let appStarted = false;   // config/события/hashchange заводим один раз
 
+// ------------------------------------------------------------
+// Вход в приложение. Сначала выясняем, кто вошёл (cookie с токеном браузер
+// отправит сам): есть пользователь - показываем приложение, нет - экран входа.
+// ------------------------------------------------------------
 async function init() {
+  initAuthScreen(onAuthenticated);
+  initUsers();
+  setUnauthorizedHandler(onUnauthorized);
+  const user = await whoAmI();
+  if (user) onAuthenticated(user);
+  else showAuth();
+}
+
+async function onAuthenticated(user) {
+  setUser(user);
+  renderUserArea();
+  hideAuth();
+  if (!appStarted) {
+    appStarted = true;
+    await loadConfig();
+    bindEvents();
+    window.addEventListener("hashchange", route);
+  }
+  watchedStatuses = null;         // после входа статусы запоминаем заново
+  startFinishWatcher();
+  await route();
+}
+
+// Токен перестал действовать (протух, сервер перезапущен, пользователя удалили).
+// Гасим таймеры и возвращаем к экрану входа, не перезагружая страницу.
+function onUnauthorized() {
+  stopTimers();
+  if (watchTimer) { clearInterval(watchTimer); watchTimer = null; }
+  setUser(null);
+  renderUserArea();
+  watchedStatuses = null;
+  showAuth();
+}
+
+async function loadConfig() {
   try {
     const cfg = await fetchJSON("/api/config");
     // ИМЕННО setDocTypes, а не присваивание. DOC_TYPES - импортированная
@@ -49,10 +92,28 @@ async function init() {
   } catch (e) {
     logLine("Не удалось загрузить конфигурацию: " + e.message, "err");
   }
-  bindEvents();
-  window.addEventListener("hashchange", route);
-  startFinishWatcher();
-  await route();
+}
+
+// Блок пользователя в шапке: кто вошёл, кнопка «Пользователи» (админу) и «Выйти».
+function renderUserArea() {
+  const el = $("user-area");
+  if (!el) return;
+  if (!USER.login) { el.innerHTML = ""; return; }
+  const adminBtn = USER.is_admin
+    ? `<button class="btn btn-ghost" id="btn-users">Пользователи</button>` : "";
+  el.innerHTML = `
+    <span class="user-chip" title="${USER.is_admin ? "Администратор" : "Пользователь"}">
+      <span class="user-dot${USER.is_admin ? " admin" : ""}"></span>${esc(USER.login)}</span>
+    ${adminBtn}
+    <button class="btn btn-ghost" id="btn-logout">Выйти</button>`;
+  $("btn-logout").addEventListener("click", doLogout);
+  if (USER.is_admin) $("btn-users").addEventListener("click", openUsers);
+}
+
+async function doLogout() {
+  await logout();
+  onUnauthorized();
+  location.hash = "#/";     // чтобы повторный вход попал на список сессий
 }
 
 // ------------------------------------------------------------
@@ -122,8 +183,11 @@ function notifyFinished(s) {
 
 async function route() {
   stopTimers();
+  if (!USER.login) return;   // вышли из системы - роутер молчит до входа
   const m = location.hash.match(/^#\/s\/([^/]+)/);
-  if (m) {
+  if (location.hash.startsWith("#/chat")) {
+    await openChat();
+  } else if (m) {
     await openSession(decodeURIComponent(m[1]));
   } else {
     showView("list");
@@ -139,6 +203,9 @@ function stopTimers() {
   // трогаем: он единственный, кто работает всегда, на любом экране.
   if (listTimer) { clearInterval(listTimer); listTimer = null; }
   stopSessionPolling();
+  // Уходя с экрана чата, обрываем незаконченный поток ответа модели: дорисовывать
+  // его в невидимый уже пузырь незачем.
+  stopChat();
 }
 
 function renderDocTypes() {
@@ -204,6 +271,7 @@ function renderServer(srv) {
 // События
 // ------------------------------------------------------------
 function bindEvents() {
+  $("btn-chat").addEventListener("click", () => { location.hash = "#/chat"; });
   $("btn-new-session").addEventListener("click", () => toggleNewSession(true));
   $("btn-create-cancel").addEventListener("click", () => toggleNewSession(false));
   $("btn-create").addEventListener("click", createSession);

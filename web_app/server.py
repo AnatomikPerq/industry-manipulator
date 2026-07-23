@@ -6,10 +6,14 @@
 работает офлайн.
 
 Единица работы - СЕССИЯ (sessions.py): комплект документов одного шкафа плюс её
-прогон и её отчёт, со своей папкой на диске. Сессии создаются прямо в интерфейсе
-и видны всем без авторизации (инструмент корпоративный). Поставив сессию на
-исполнение, можно закрыть вкладку: статус, лог и отчёт живут на диске, а не в
-памяти браузера или процесса.
+прогон и её отчёт, со своей папкой на диске. Поставив сессию на исполнение,
+можно закрыть вкладку: статус, лог и отчёт живут на диске, а не в памяти
+браузера или процесса.
+
+ВХОД ПО ЛОГИНУ (users.py): у сессии есть владелец, человек видит только свои
+сессии, администратор - все и управляет пользователями. Разграничение мягкое
+(токен в cookie, пароли в открытом виде): цель - развести рабочие пространства
+коллег в доверенной сети, а не устоять против атаки.
 
 СКРИПТЫ СЧИТАЮТСЯ СРАЗУ, В ОЧЕРЕДЬ ВСТАЁТ ТОЛЬКО СТАДИЯ ИИ (queue_worker.py):
 извлечение и детерминированные чекеры грузят локальный процессор и друг другу не
@@ -29,6 +33,13 @@
 Эндпоинты:
     GET  /                              - страница интерфейса
     GET  /static/<file>                 - статика (logo, css, js)
+    POST /api/auth/login                - вход по логину {login[, password]}
+    POST /api/auth/register             - регистрация обычного пользователя {login}
+    POST /api/auth/logout               - выход (гасит токен)
+    GET  /api/auth/me                   - кто вошёл (или null)
+    GET  /api/users                     - список пользователей (админ)
+    POST /api/users                     - создать пользователя (админ)
+    POST /api/users/<login>/{delete,update} - удалить/изменить (админ)
     GET  /api/config                    - типы документов, версия, адрес сервера ИИ
     GET  /api/check-llm                 - какие модели ИИ загружены/доступны
     GET  /api/models                    - список моделей сервера для выбора в интерфейсе
@@ -49,10 +60,17 @@
     GET  /api/sessions/<id>/report.pdf  - тот же отчёт одним PDF
     GET  /api/sessions/<id>/file?path=  - исходный документ (открыть во вкладке)
     GET  /api/sessions/<id>/fragment?…  - PNG с фрагментом чертежа у находки
+    GET  /api/chat                      - активный чат пользователя (сообщения + модель)
+    GET  /api/chat/file?path=           - файл/картинка, приложенные к сообщению
+    POST /api/chat/set-model            - выбрать модель для чата {model}
+    POST /api/chat/upload               - приложить файлы к чату (multipart)
+    POST /api/chat/send                 - отправить сообщение, ответ ПОТОКОМ (ndjson)
+    POST /api/chat/new                  - архивировать текущий чат и начать новый
 """
 
 import argparse
 import json
+import mimetypes
 import os
 import shutil
 import sys
@@ -85,9 +103,17 @@ from llm_check import check_server_alive  # noqa: E402  (быстрая пров
 import multipart                          # noqa: E402  (потоковый разбор загрузки)
 import queue_worker                       # noqa: E402  (константы пула - во фронтенд)
 from queue_worker import AnalysisQueue    # noqa: E402
+from chats import ChatError, ChatStore    # noqa: E402  (обычный чат с ИИ)
 from sessions import FULL_PROJECT_TYPE, SessionError, SessionStore  # noqa: E402
+from users import UserError, UserStore, canon  # noqa: E402
 
-PROJECT_VERSION = "V2.0"
+PROJECT_VERSION = "V2.1 beta"
+
+# Имя cookie с токеном входа. Токен кладём именно в cookie, а не в localStorage:
+# исходные документы, PDF-отчёт и фрагменты чертежа открываются НАТИВНО браузером
+# (<a href>, <img src>, переход по ссылке), и заголовок X-Auth-Token туда не
+# подставить - а cookie уходит с каждым таким запросом сама.
+AUTH_COOKIE = "im_auth"
 
 # Content-Type для просмотра исходных документов сессии прямо в браузере.
 # PDF отдаём inline (вкладка откроет встроенный просмотрщик), книгу Excel -
@@ -161,6 +187,28 @@ def _config_path():
 
 STORE = SessionStore()
 QUEUE = AnalysisQueue(STORE, _config_path())
+USERS = UserStore()
+CHATS = ChatStore()
+
+
+# Публичные пути - до которых пускаем без входа: сама страница, статика и
+# эндпоинты аутентификации (иначе войти было бы нечем). Всё остальное под /api
+# требует действующего токена.
+def _is_public(path) -> bool:
+    return (path == "/" or path.startswith("/static/")
+            or path.startswith("/api/auth/"))
+
+
+def _auth_cookie_header(token) -> tuple:
+    # HttpOnly: JS токен читать незачем (кто вошёл - скажет /api/auth/me), а так
+    # его не утащить со страницы. SameSite=Lax достаточно: межсайтовых POST у
+    # инструмента нет. Max-Age на год - «закрыл вкладку, вернулся завтра».
+    return ("Set-Cookie",
+            f"{AUTH_COOKIE}={token}; Path=/; SameSite=Lax; HttpOnly; Max-Age=31536000")
+
+
+def _clear_cookie_header() -> tuple:
+    return ("Set-Cookie", f"{AUTH_COOKIE}=; Path=/; SameSite=Lax; HttpOnly; Max-Age=0")
 
 
 # =====================================================================
@@ -280,13 +328,44 @@ class Handler(BaseHTTPRequestHandler):
         pass  # не засоряем stdout сервера запросами
 
     # ---- утилиты ответа ----
-    def _send_json(self, obj, status=200):
+    def _send_json(self, obj, status=200, extra_headers=None):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        for name, value in (extra_headers or []):
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
+
+    # ---- аутентификация ----
+    def _cookie_token(self):
+        raw = self.headers.get("Cookie", "")
+        for part in raw.split(";"):
+            name, sep, value = part.strip().partition("=")
+            if sep and name == AUTH_COOKIE:
+                return value
+        return None
+
+    def _resolve_user(self):
+        """Текущий пользователь по токену (заголовок X-Auth-Token имеет приоритет
+        над cookie - на случай программного доступа), либо None."""
+        token = self.headers.get("X-Auth-Token") or self._cookie_token()
+        return USERS.resolve_token(token)
+
+    def _require_admin(self):
+        if not (self.user and self.user["is_admin"]):
+            raise SessionError("Требуются права администратора", 403)
+
+    def _require_session_access(self, session_id):
+        """Пускает к сессии только её владельца и любого администратора.
+        owner_of заодно даёт 404, если сессии нет вовсе."""
+        if self.user and self.user["is_admin"]:
+            STORE.owner_of(session_id)      # 404, если сессии нет
+            return
+        owner = STORE.owner_of(session_id)
+        if owner != (self.user or {}).get("canonical"):
+            raise SessionError("Нет доступа к этой сессии", 403)
 
     def _send_file(self, path: Path, content_type, disposition=None):
         """Отдаёт файл ПОТОКОМ, не поднимая его в память целиком.
@@ -324,21 +403,36 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
         try:
+            self.user = self._resolve_user()
+            if not _is_public(path) and self.user is None:
+                # auth:true - сигнал фронтенду показать экран входа, а не тост
+                return self._send_json({"error": "Требуется вход", "auth": True}, 401)
+
             if path == "/":
                 return self._send_file(STATIC_DIR / "index.html",
                                        "text/html; charset=utf-8")
             if path.startswith("/static/"):
                 return self._serve_static(path[len("/static/"):])
+            if path == "/api/auth/me":
+                return self._send_json({"user": self.user})
             if path == "/api/config":
                 return self._api_config()
             if path == "/api/models":
                 return self._send_json(_api_models_payload())
             if path == "/api/check-llm":
                 return self._api_check_llm()
+            if path == "/api/users":
+                self._require_admin()
+                return self._send_json({"users": USERS.list_users()})
+            if path == "/api/chat":
+                return self._send_json({"chat": CHATS.get_active(self.user["canonical"])})
+            if path == "/api/chat/file":
+                return self._api_chat_file(parse_qs(parsed.query))
             if path == "/api/sessions":
                 return self._api_sessions_list()
             if path.startswith("/api/sessions/"):
                 session_id, action = self._split_session_path(path)
+                self._require_session_access(session_id)
                 if action is None:
                     return self._send_json(self._session_view(session_id))
                 if action == "log":
@@ -354,7 +448,7 @@ class Handler(BaseHTTPRequestHandler):
                 if action == "fragment":
                     return self._api_fragment(session_id, parse_qs(parsed.query))
             self.send_error(404)
-        except SessionError as e:
+        except (SessionError, UserError, ChatError) as e:
             self._send_json({"error": str(e)}, e.status)
         except Exception as e:  # noqa: BLE001
             self._send_json({"error": f"{type(e).__name__}: {e}"}, 500)
@@ -362,10 +456,47 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = unquote(urlparse(self.path).path)
         try:
+            self.user = self._resolve_user()
+
+            # Эндпоинты входа - до проверки авторизации (иначе войти нечем).
+            if path == "/api/auth/login":
+                return self._api_login()
+            if path == "/api/auth/register":
+                return self._api_register()
+            if path == "/api/auth/logout":
+                return self._api_logout()
+
+            if self.user is None:
+                return self._send_json({"error": "Требуется вход", "auth": True}, 401)
+
+            # Обычный чат с ИИ. Не под /api/sessions: чат привязан к самому
+            # пользователю (владелец = кто вошёл), а не к сессии, и разграничение
+            # доступа тут не нужно - каждый работает только со своим чатом.
+            if path == "/api/chat/set-model":
+                model = self._body_json().get("model")
+                chat = CHATS.set_model(self.user["canonical"], model)
+                return self._send_json({"ok": True, "model": chat.get("model")})
+            if path == "/api/chat/new":
+                chat = CHATS.new_chat(self.user["canonical"])
+                return self._send_json({"ok": True, "chat": chat})
+            if path == "/api/chat/upload":
+                return self._api_chat_upload()
+            if path == "/api/chat/send":
+                return self._api_chat_send()
+
+            # Управление пользователями - только администратору.
+            if path == "/api/users":
+                self._require_admin()
+                return self._api_user_create()
+            if path.startswith("/api/users/"):
+                self._require_admin()
+                return self._api_user_action(path)
+
             if path == "/api/sessions":
                 return self._api_session_create()
             if path.startswith("/api/sessions/"):
                 session_id, action = self._split_session_path(path)
+                self._require_session_access(session_id)
                 if action == "rename":
                     meta = STORE.rename(session_id, self._body_json().get("name"))
                     return self._send_json({"ok": True, "name": meta["name"]})
@@ -400,7 +531,7 @@ class Handler(BaseHTTPRequestHandler):
                     QUEUE.cancel(session_id)
                     return self._send_json({"ok": True})
             self.send_error(404)
-        except SessionError as e:
+        except (SessionError, UserError, ChatError) as e:
             self._send_json({"error": str(e)}, e.status)
         except Exception as e:  # noqa: BLE001
             self._send_json({"error": f"{type(e).__name__}: {e}"}, 500)
@@ -448,23 +579,38 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": f"{type(e).__name__}: {e}"}, 500)
 
     def _api_sessions_list(self):
-        """Список всех сессий - общий для всех пользователей, локализации нет.
+        """Список сессий текущего пользователя (администратору - всех).
         Номера в очередях считаем здесь, а не храним: очереди живут в памяти
-        воркера, и их порядок - единственное, что его определяет."""
+        воркера, и их порядок - единственное, что его определяет.
+
+        Состояние очередей (running/queued/llm) - ОБЩЕЕ на всех: сервер ИИ один,
+        и человеку важно видеть, что перед ним в очереди стоят чужие прогоны,
+        даже если самих чужих сессий он не видит."""
+        is_admin = self.user["is_admin"]
+        me = self.user["canonical"]
         positions = QUEUE.positions()
         llm_positions = QUEUE.llm_positions()
         snap = QUEUE.snapshot()
+        names = USERS.display_names() if is_admin else {}
         sessions = []
         for meta in STORE.list():
+            if not is_admin and meta.get("owner") != me:
+                continue
             item = dict(meta)
             item["queue_position"] = positions.get(meta["id"])
             item["llm_position"] = llm_positions.get(meta["id"])
             # число файлов берём из session.json, а не пересчитываем обходом
             # диска: этот список опрашивается раз в 2 с по ВСЕМ сессиям сразу
             item["n_files"] = STORE.file_count(meta["id"], meta)
+            # подпись владельца нужна только администратору - он группирует
+            # список по людям; у обычного пользователя все сессии его же
+            if is_admin:
+                owner = meta.get("owner")
+                item["owner_display"] = names.get(owner, owner) if owner else None
             sessions.append(item)
         self._send_json({
             "sessions": sessions,
+            "is_admin": is_admin,
             "running": snap["running"],
             # сколько прогонов реально занимают процессор: сессия, ждущая
             # очереди к ИИ, жива, но ничего не считает
@@ -481,11 +627,72 @@ class Handler(BaseHTTPRequestHandler):
         meta["queue_position"] = QUEUE.positions().get(session_id)
         meta["llm_position"] = QUEUE.llm_positions().get(session_id)
         meta["is_running"] = session_id in QUEUE.snapshot()["running"]
+        # Владельца показываем администратору, зашедшему в чужую сессию: иначе
+        # непонятно, чья она. Себе показывать незачем - это и так его сессия.
+        owner = meta.get("owner")
+        if self.user["is_admin"] and owner and owner != self.user["canonical"]:
+            meta["owner_display"] = USERS.display_names().get(owner, owner)
         return meta
 
     def _api_session_create(self):
-        meta = STORE.create(self._body_json().get("name"))
+        # owner - канонический логин (ключ доступа), owner_display - как назвать
+        # папку владельца на диске (читабельнее: "Иванов", а не "иванов").
+        meta = STORE.create(self._body_json().get("name"),
+                            owner=self.user["canonical"],
+                            owner_display=self.user["login"])
         self._send_json(meta, 201)
+
+    # ---- аутентификация и пользователи ----
+    def _api_login(self):
+        body = self._body_json()
+        result = USERS.login(body.get("login"), body.get("password"))
+        if result["status"] == "ok":
+            # cookie с токеном ставит сервер; фронтенду отдаём только, кто вошёл
+            return self._send_json(
+                {"status": "ok", "user": result["user"]},
+                extra_headers=[_auth_cookie_header(result["token"])])
+        # not_found / password_required / bad_password - это ПРИКЛАДНОЙ исход
+        # диалога входа, а не отказ транспорта: интерфейс по нему спросит пароль,
+        # предложит регистрацию или скажет «неверный пароль». Поэтому 200, а не
+        # 401 - код 401 с auth:true у нас означает другое (протух токен, показать
+        # экран входа), и bad_password в нём утонул бы как «Unauthorized».
+        self._send_json(result, 200)
+
+    def _api_register(self):
+        result = USERS.register(self._body_json().get("login"))
+        self._send_json(
+            {"status": "ok", "user": result["user"]},
+            extra_headers=[_auth_cookie_header(result["token"])])
+
+    def _api_logout(self):
+        token = self.headers.get("X-Auth-Token") or self._cookie_token()
+        USERS.revoke(token)
+        self._send_json({"ok": True}, extra_headers=[_clear_cookie_header()])
+
+    def _api_user_create(self):
+        body = self._body_json()
+        user = USERS.create_user(body.get("login"),
+                                 is_admin=bool(body.get("is_admin")),
+                                 password=body.get("password"))
+        self._send_json({"ok": True, "user": user}, 201)
+
+    def _api_user_action(self, path):
+        """/api/users/<login>/<delete|update>. Логин в пути уже раскодирован
+        (do_POST делает unquote), а слэшей в нём быть не может - _LOGIN_RE их не
+        пропускает, поэтому разбор по первому '/' однозначен."""
+        rest = path[len("/api/users/"):].strip("/")
+        login, _, action = rest.partition("/")
+        if action == "delete":
+            USERS.delete_user(login)
+            return self._send_json({"ok": True})
+        if action == "update":
+            body = self._body_json()
+            user = USERS.update_user(
+                login,
+                is_admin=body.get("is_admin"),
+                password=body.get("password"))
+            return self._send_json({"ok": True, "user": user})
+        self.send_error(404)
 
     def _api_upload(self, session_id):
         """Дозагрузка файлов в сессию. НИЧЕГО не стирает: у каждой сессии свой
@@ -645,6 +852,118 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(png)
 
+    # ---- обычный чат с ИИ ----
+
+    def _write_ndjson(self, obj):
+        """Одно событие потока: JSON-объект в строку, сразу на провод.
+
+        flush обязателен - иначе ответ модели копился бы в буфере и приходил бы
+        не потоком, а разом в конце, ровно то, ради чего стриминг и затевался."""
+        self.wfile.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+        self.wfile.flush()
+
+    def _api_chat_file(self, query):
+        """Файл или картинка, приложенные к сообщению чата. Картинку показываем
+        inline (превью прямо в диалоге), прочее - вложением на скачивание."""
+        rel = (query.get("path") or [""])[0]
+        target = CHATS.resolve_file(self.user["canonical"], rel)
+        ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+        disposition = "inline" if ctype.startswith("image/") else "attachment"
+        self._send_file(target, ctype,
+                        f"{disposition}; filename*=UTF-8''{quote(target.name)}")
+
+    def _api_chat_upload(self):
+        """Приложить файлы к активному чату. Тело льётся в файл потоком, ровно
+        как загрузка документов сессии (multipart.py): альбом или большой PDF не
+        должен оседать в памяти сервера целиком."""
+        owner = self.user["canonical"]
+        CHATS.get_active(owner)         # заведёт папку чата, если её ещё нет
+        skipped, open_files = [], []
+
+        def open_part(field, filename):
+            if field != "files":
+                return None
+            try:
+                target, ref = CHATS.upload_target(owner, filename)
+            except ChatError as e:
+                skipped.append({"name": Path(filename).name, "reason": str(e)})
+                return None
+            handle = open(target, "wb")
+            open_files.append((target, handle, ref))
+            return handle
+
+        try:
+            multipart.parse(self.rfile, self.headers.get("Content-Type", ""),
+                            self.headers.get("Content-Length"), open_part)
+        except multipart.MultipartError as e:
+            for target, handle, _ in open_files:
+                handle.close()
+                target.unlink(missing_ok=True)
+            raise ChatError(str(e), 400)
+        finally:
+            for _, handle, _ in open_files:
+                if not handle.closed:
+                    handle.close()
+
+        saved = []
+        for target, _, ref in open_files:
+            ref["size"] = target.stat().st_size
+            saved.append(ref)
+        self._send_json({"files": saved, "skipped": skipped})
+
+    def _api_chat_send(self):
+        """Отправить сообщение и вернуть ответ модели ПОТОКОМ (ndjson-события
+        {type: delta|done|error}).
+
+        Отказ модели или сервера ОБЯЗАН доехать до пользователя (главное правило
+        проекта - «проверить не удалось» это находка, а не тишина): заголовки
+        уже ушли, поэтому ошибку показываем событием error в потоке, а не сменой
+        HTTP-кода. Частичный ответ, если что-то успели получить, сохраняем - он
+        часть диалога.
+        """
+        import chat_llm          # ленивый импорт: тянет openai (и fitz для PDF)
+
+        owner = self.user["canonical"]
+        body = self._body_json()
+        text = (body.get("text") or "").strip()
+        refs = CHATS.clean_file_refs(owner, body.get("files") or [])
+        if not text and not refs:
+            raise ChatError("Пустое сообщение", 400)
+
+        chat = CHATS.get_active(owner)
+        model = chat.get("model")
+        if not model:
+            raise ChatError("Не выбрана модель — выберите её над полем ввода", 400)
+
+        cfg = pipeline.load_config(_config_path())
+        server_cfg = chat_llm.server_cfg_from_config(cfg)
+
+        # Вопрос фиксируем на диске ДО обращения к модели: даже если сервер ИИ не
+        # ответит, сообщение пользователя из истории не пропадёт.
+        CHATS.append_message(owner, "user", text, refs)
+        chat = CHATS.get_active(owner)
+        messages = chat_llm.build_messages(chat, lambda p: CHATS.resolve_file(owner, p))
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+
+        acc = []
+        try:
+            for delta in chat_llm.stream_reply(server_cfg, model, messages):
+                acc.append(delta)
+                self._write_ndjson({"type": "delta", "text": delta})
+            CHATS.append_message(owner, "assistant", "".join(acc))
+            self._write_ndjson({"type": "done"})
+        except Exception as e:  # noqa: BLE001
+            if acc:
+                CHATS.append_message(owner, "assistant", "".join(acc))
+            try:
+                self._write_ndjson({"type": "error", "error": f"{type(e).__name__}: {e}"})
+            except Exception:  # noqa: BLE001 - клиент уже отключился, писать некуда
+                pass
+
 
 def main():
     # До первого print: иначе первые же русские строки уйдут в консоль кашей.
@@ -675,6 +994,16 @@ def main():
             print(f"Создан {local_cfg} из образца - при необходимости "
                   f"поправьте в нём адрес сервера ИИ.")
 
+    # Разовая передача бесхозных сессий администратору. Сессии, созданные до
+    # появления пользователей, владельца не имеют - без этого их не увидел бы
+    # никто, кроме как через панель. Идемпотентно: у сессии с owner ничего не
+    # меняется, поэтому вызов на каждом старте безвреден.
+    moved = STORE.assign_ownerless(USERS.primary_admin())
+    if moved:
+        print(f"Прежние сессии ({moved}) переданы администратору.")
+    print("Вход в интерфейс по логину. Учётка администратора по умолчанию: "
+          "admin / admin (смените пароль в разделе «Пользователи»).")
+
     QUEUE.start()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
 
@@ -698,15 +1027,17 @@ def main():
         import threading
         import webbrowser
         threading.Timer(0.7, lambda: webbrowser.open(url)).start()
-    # Авторизации нет сознательно (инструмент корпоративный, сессии видны всем).
-    # Пока сервер слушает localhost, это ничего не значит; открытый наружу - уже
-    # значит: любой в сети сможет удалить чужую сессию или оборвать чужой прогон.
-    # Сказать об этом надо в момент запуска, а не в README, который не читают.
+    # Вход по логину есть, но он МЯГКИЙ: пароли в открытом виде, а учётка
+    # администратора по умолчанию - admin/admin. Пока сервер слушает localhost,
+    # это неважно; открытый наружу - уже значит, что чужой в сети может войти
+    # админом с паролем по умолчанию и увидеть все сессии. Сказать об этом надо
+    # в момент запуска, а не в README, который не читают.
     if args.host not in ("127.0.0.1", "localhost", "::1"):
-        print(f"ВНИМАНИЕ: сервер слушает {args.host} - он доступен из сети, а "
-              f"авторизации в интерфейсе нет.\n"
-              f"         Любой, кто откроет адрес, сможет запускать, отменять и "
-              f"удалять ЧУЖИЕ сессии вместе с их файлами.")
+        print(f"ВНИМАНИЕ: сервер слушает {args.host} - он доступен из сети.\n"
+              f"         Вход по логину есть, но пароли хранятся в открытом виде, "
+              f"а учётка администратора по умолчанию admin/admin.\n"
+              f"         СМЕНИТЕ пароль администратора в разделе «Пользователи», "
+              f"иначе любой в сети получит доступ ко всем сессиям.")
     print("Ctrl+C для остановки.")
     try:
         server.serve_forever()

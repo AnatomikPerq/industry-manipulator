@@ -13,11 +13,23 @@ export const $ = (id) => document.getElementById(id);
 // отвечает на send_error() страничкой HTML, и прежний безусловный res.json()
 // падал на ней SyntaxError'ом - пользователь видел «Unexpected token '<'»
 // вместо «сессия не найдена». Тело читаем один раз текстом и разбираем сами.
+// Сессия входа кончилась (токен протух, сервер перезапущен, пользователя
+// удалили) - на любой 401 с {auth:true} сервер просит показать экран входа.
+// Обработчик регистрирует app.js: util не знает про экраны, а экраны про util
+// знают. Единая точка, потому что fetchJSON зовут отовсюду, и во многих местах
+// ошибку глотают молча (поллинг) - там 401 иначе прошёл бы незамеченным.
+let onUnauthorized = null;
+export function setUnauthorizedHandler(fn) { onUnauthorized = fn; }
+
 export async function fetchJSON(url, opts) {
   const res = await fetch(url, opts);
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { /* не JSON */ }
+  if (res.status === 401 && data && data.auth) {
+    if (onUnauthorized) onUnauthorized();
+    throw new Error("Требуется вход");
+  }
   if (!res.ok) {
     throw new Error((data && data.error) || res.statusText || `HTTP ${res.status}`);
   }
@@ -92,6 +104,8 @@ export function setStatus(text, busy, cls) {
 export function showView(which) {
   $("view-list").classList.toggle("show", which === "list");
   $("view-session").classList.toggle("show", which === "session");
+  const chat = $("view-chat");
+  if (chat) chat.classList.toggle("show", which === "chat");
 }
 
 export function askNotifyPermission() {
