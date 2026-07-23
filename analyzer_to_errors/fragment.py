@@ -33,7 +33,7 @@ from pathlib import Path
 
 import fitz
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+from settings import PROJECT_ROOT
 
 # Поля вокруг попадания, pt. Обозначение само по себе ничего не объясняет -
 # нужен контекст: что за аппарат, куда идут провода, что подписано рядом.

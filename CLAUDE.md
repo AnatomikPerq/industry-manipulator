@@ -998,6 +998,111 @@ args-файлом), а не потоком — только так отмена 
 CLI (`python main.py …`) сессий не знает и продолжает работать по общему
 `analyzer_to_errors/data/` — быстрый цикл отладки чекеров не изменился.
 
+### Портативная сборка (PyInstaller, `package.spec` + `build_dist.py`)
+
+**build-ready**: проект собирается в exe, работающий без установленного Python и
+зависимостей — `python build_dist.py` → `dist/IndustryManipulator/`. Версия
+пайплайна (`V2.0`) от этого не меняется: сборка — это способ поставки, а не
+релиз новых возможностей.
+
+Два входа в ОДНОМ onedir-бандле (`package.spec`, общий `COLLECT` — зависимости не
+дублируются):
+
+* `IndustryManipulator.exe` — веб-интерфейс (`web_app/server.py`);
+* `runner.exe` — подпроцесс одного прогона анализа (`web_app/_pipeline_runner.py`).
+
+**Зачем два exe, а не один.** `queue_worker.py` запускает раннер как
+`[sys.executable, "-u", "_pipeline_runner.py", args]` — расчёт на то, что
+`sys.executable` это интерпретатор Python. Внутри frozen-процесса это уже сам exe,
+и передать ему путь к `.py` как аргумент значит просто передать ему аргумент, а не
+запустить скрипт. Второй, отдельно собранный exe с тем же входом решает это без
+правки самого пайплайна: `web_app/queue_worker.py:_runner_command` при
+`paths.FROZEN` зовёт `runner.exe <args>` вместо `python -u _pipeline_runner.py
+<args>`.
+
+**Код вкомпилирован внутрь, пользовательские вещи — СНАРУЖИ, рядом с exe.**
+Пайплайн держит все пути через `Path(__file__).resolve().parent`
+(`settings.PROJECT_ROOT`, `ingest.PROJECT_ROOT`, `fragment.PROJECT_ROOT`,
+`oi_agent.PROMPTS_DIR`, и у web_app — `sessions.ANALYZER_DIR`,
+`queue_worker.RUNNER_SCRIPT`, `server.ANALYZER_DIR/STATIC_DIR`) — внутри frozen-exe
+`__file__` компилированного модуля указывает в `_internal/`, а
+`config.yaml`/`config.local.yaml`/`known_errors.json`/`prompts/`/сессии/загруженные
+документы там оказаться не должны: это ровно то, что инженер редактирует и хранит
+между обновлениями программы. Поэтому:
+
+* `analyzer_to_errors/settings.py`, `ingest.py`, `fragment.py`, `oi_agent.py`
+  переключают свой `PROJECT_ROOT`/`PROMPTS_DIR` на `Path(sys.executable).resolve()
+  .parent / "analyzer_to_errors"` при `getattr(sys, "frozen", False)` (`ingest.py` и
+  `fragment.py` раньше вычисляли `PROJECT_ROOT` каждый сам через свой `__file__` —
+  теперь оба берут готовое значение из `settings`, иначе фикс в одном месте
+  разъехался бы с необновлённой копией в другом, ровно так же, как уже случалось с
+  омоглифами в `normalize.py` и загрузчиками в `script_loader.py`);
+* `web_app/paths.py` (новый модуль) — единая точка для `PROJECT_ROOT`/`ANALYZER_DIR`
+  веб-части: `sessions.py`, `queue_worker.py`, `_pipeline_runner.py`, `server.py`
+  берут значение из него, а не считают каждый свой `HERE.parent` заново. Раньше их
+  было четыре независимых копии одной и той же логики — при сборке в exe они
+  разъехались бы одна от другой так же, как разъезжались найденные и исправленные
+  дубли путей (см. `script_loader.py`, `normalize.py` выше);
+* `server.STATIC_DIR` — исключение: статика (`index.html`/css/js) в exe остаётся
+  ВНУТРИ бандла (`sys._MEIPASS / "web_app" / "static"`), потому что это код
+  интерфейса, а не то, что правит инженер в поле;
+* `base_analysis_scripts` и `prompts/` физически копируются НАРУЖУ, рядом с exe,
+  отдельным шагом `build_dist.py` (а не через `datas` в спеке, которые кладутся
+  внутрь `_internal`) — ровно потому, что промпты правят часто (см. `oi_agent.py`
+  выше по файлу), а `base_analysis_scripts` уже и так задуман как «данные, а не
+  код» (копируется в каждую сессию, лежит под `paths.scripts_dir`, а не
+  импортируется обычным `import`).
+
+**Open Interpreter собирается «как есть», без исключений.** Первая версия спека
+исключала `matplotlib`/`numpy`/`tkinter` (сервер их не использует). Сборка падала
+на старте: `interpreter/core/computer/display/display.py` лениво импортирует
+`matplotlib.pyplot` через `importlib.util.find_spec` — модуль на машине сборки
+УСТАНОВЛЕН, но исключён из бандла, и frozen-импортёр PyInstaller (в отличие от
+обычного `importlib`, тихо возвращающего `None` на отсутствующий опциональный
+модуль) роняет `ModuleNotFoundError` на самом импорте `interpreter`. Дешевле
+собрать всё, что реально стоит на машине сборки, чем воевать с ленивыми
+импортами чужого пакета.
+
+**`copy_metadata` для пакетов, спрашивающих свою версию через `importlib.metadata`**
+(`readchar`, `inquirer`, `open-interpreter`, `litellm`, `openai`, `tiktoken`,
+`jsonschema`, `PyMuPDF`, `pdfplumber`, `openpyxl`, `PyYAML`) — без `.dist-info`
+внутри бандла это `PackageNotFoundError` на первом же обращении, а не на этапе
+сборки: `interpreter/terminal_interface/local_setup.py` тянет `inquirer` →
+`readchar`, который зовёт `importlib.metadata.version("readchar")` на импорте, и
+сервер падал уже при старте, до открытия порта.
+
+**`collect_data_files` для пакетов с нужными им на диске ресурсами**
+(`litellm`, `tiktoken`, `yaspin`) — `yaspin/spinners.json` не код, а данные
+спиннера консоли, `pkgutil.get_data` не находит их в архиве без явного `datas`.
+
+**Кодировка консоли** (`web_app/paths.py:setup_console_utf8`) — вызывается первой
+строкой в `main()` у `server.py` и `_pipeline_runner.py`, ДО первого `print`.
+Консоль Windows по умолчанию не в UTF-8, и без `SetConsoleOutputCP(65001)` +
+`sys.stdout.reconfigure(encoding="utf-8", line_buffering=True)` русский текст в
+логе — кракозябры. Не вызывается на импорте модуля (а не в `main()` было бы
+проще) сознательно: `paths.py` импортируют и тесты, которым незачем трогать
+кодовую страницу реальной консоли на ровном месте. `line_buffering=True` — иначе
+при перенаправлении вывода в файл (например, из `.bat`) строки копятся в буфере
+и не появляются, пока процесс не завершится.
+
+**Доступ по сети (`--host 0.0.0.0` / `IM_HOST` / `IM_PORT`).** Аргументы exe при
+запуске двойным кликом не передать, поэтому `server.main()` сначала читает
+`IM_HOST`/`IM_PORT` из окружения, а CLI-флаг их перебивает. `build_dist.py`
+кладёт рядом с exe `Открытый доступ из сети.bat`, который выставляет
+`IM_HOST=0.0.0.0` и запускает exe (сам `.bat` — в cp866 и на латинице: batch
+читается в кодовой странице консоли, а не в UTF-8, кириллицу туда безопасно не
+положить). Браузер при этом открывается на `localhost`, а не на `0.0.0.0` — это
+адрес прослушивания («на всех интерфейсах»), а не адрес назначения, по нему
+никто никуда не подключится. Предупреждение об отсутствии авторизации (см.
+`web_app/` выше) при этом печатается как обычно.
+
+Собирать: `python build_dist.py` (сам вызывает `pyinstaller package.spec
+--noconfirm`, затем раскладывает `analyzer_to_errors/{config.yaml,
+config.local.example.yaml, known_errors.json, prompts/,
+data/base_analysis_scripts/}` и создаёт пустые `sessions/`, `data/base_files/`
+и т.д. рядом с exe). `dist/` и `build/` — в `.gitignore`, пересобираются из
+исходников; `package.spec` и `build_dist.py` в репозитории.
+
 ### Config (`analyzer_to_errors/config.yaml`)
 
 All paths in `config.yaml` are resolved **relative to the config file's own directory**,

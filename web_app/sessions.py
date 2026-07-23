@@ -43,9 +43,8 @@ from pathlib import Path
 # analyzer_to_errors уже в sys.path у сервера. bundles - стдлиб-модуль
 # (никакого fitz), и в нём живёт имя метки нарезанной подпапки.
 import bundles
+from paths import ANALYZER_DIR
 
-HERE = Path(__file__).resolve().parent
-ANALYZER_DIR = HERE.parent / "analyzer_to_errors"
 SESSIONS_DIR = ANALYZER_DIR / "sessions"
 
 # Общая папка скриптов-парсеров, откуда её копия раскладывается в каждую сессию.

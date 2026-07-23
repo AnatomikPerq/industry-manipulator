@@ -46,7 +46,8 @@ import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ANALYZER_DIR = HERE.parent / "analyzer_to_errors"
+sys.path.insert(0, str(HERE))
+from paths import ANALYZER_DIR  # noqa: E402
 sys.path.insert(0, str(ANALYZER_DIR))
 
 import main as pipeline              # noqa: E402
@@ -125,6 +126,12 @@ def build_session_config(base_config_path, paths: dict, out_path, llm=None) -> s
 
 
 def main():
+    # На случай ручного запуска раннера из консоли для отладки: без этого его
+    # русские логи - каша. Как подпроцесс сервера он и так получает stdout в
+    # UTF-8 (родитель ставит PYTHONIOENCODING), и повторная настройка безвредна.
+    from paths import setup_console_utf8
+    setup_console_utf8()
+
     args_path = Path(sys.argv[1])
     args = json.loads(args_path.read_text(encoding="utf-8"))
     result_path = args_path.with_name(args_path.name + ".result.json")

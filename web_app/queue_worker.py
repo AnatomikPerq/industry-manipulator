@@ -56,10 +56,23 @@ import time
 from collections import OrderedDict, deque
 from pathlib import Path
 
+from paths import FROZEN, PROJECT_ROOT
 from sessions import SessionError
 
 HERE = Path(__file__).resolve().parent
 RUNNER_SCRIPT = HERE / "_pipeline_runner.py"
+
+# Собранный в exe раннер (см. build/spec) - отдельный exe рядом с основным,
+# а не тот же файл: sys.executable внутри frozen-процесса указывает на сам
+# exe, и "python -u _pipeline_runner.py" из dev-режима для него не работает
+# (это не интерпретатор, а готовая программа).
+RUNNER_EXE = PROJECT_ROOT / "runner.exe"
+
+
+def _runner_command(args_path) -> list:
+    if FROZEN:
+        return [str(RUNNER_EXE), str(args_path)]
+    return [sys.executable, "-u", str(RUNNER_SCRIPT), str(args_path)]
 
 # Сколько сессий считают СКРИПТЫ одновременно. Скриптовая стадия упирается в
 # процессор и диск, а не в сеть: смысл поднимать это значение есть ровно до
@@ -379,8 +392,7 @@ class AnalysisQueue:
             popen_kwargs["start_new_session"] = True
 
         try:
-            proc = subprocess.Popen(
-                [sys.executable, "-u", str(RUNNER_SCRIPT), str(args_path)], **popen_kwargs)
+            proc = subprocess.Popen(_runner_command(args_path), **popen_kwargs)
         except OSError as e:
             log(f"!!! Не удалось запустить процесс анализа: {e}")
             self.store.update(session_id, status="error", error=str(e),

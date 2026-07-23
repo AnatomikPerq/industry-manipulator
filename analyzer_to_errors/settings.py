@@ -8,13 +8,22 @@
 """
 
 import logging
+import sys
 from pathlib import Path
 
 import yaml
 
 logger = logging.getLogger("error_analyzer")
 
-PROJECT_ROOT = Path(__file__).resolve().parent
+# Собранный в один exe (PyInstaller) код лежит в _internal рядом с exe, а не
+# там, откуда его удобно редактировать - config.yaml и остальные пользовательские
+# файлы должны остаться РЯДОМ С EXE, а не внутри архива. sys.executable там -
+# это сам exe (server.exe или runner.exe), оба лежат в одной папке, поэтому
+# .parent совпадает независимо от того, какой из двух сейчас запущен.
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = Path(sys.executable).resolve().parent / "analyzer_to_errors"
+else:
+    PROJECT_ROOT = Path(__file__).resolve().parent
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 

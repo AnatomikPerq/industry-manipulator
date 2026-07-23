@@ -53,6 +53,7 @@
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import urllib.request
@@ -60,10 +61,17 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+from paths import ANALYZER_DIR, PROJECT_ROOT, setup_console_utf8  # noqa: E402
+
 HERE = Path(__file__).resolve().parent
-PROJECT_ROOT = HERE.parent
-ANALYZER_DIR = PROJECT_ROOT / "analyzer_to_errors"
-STATIC_DIR = HERE / "static"
+# Статика (index.html, css, js) ВКОМПИЛИРОВАНА в exe (см. package.spec: datas
+# кладут её в _internal/web_app/static). В собранном виде __file__ указывает в
+# архив, а не на диск, поэтому берём папку из распакованного бандла
+# (sys._MEIPASS = _internal), а не из HERE.
+if getattr(sys, "frozen", False):
+    STATIC_DIR = Path(sys._MEIPASS) / "web_app" / "static"
+else:
+    STATIC_DIR = HERE / "static"
 
 # Пайплайн лежит рядом, в analyzer_to_errors - добавляем его в путь импорта.
 # (нужен и здесь: конфиг, resolve_path, detect_doc_type - используются напрямую,
@@ -639,18 +647,57 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    # До первого print: иначе первые же русские строки уйдут в консоль кашей.
+    setup_console_utf8()
+
+    # Значения по умолчанию берём из окружения - это единственный способ задать
+    # адрес/порт, когда программу запускают ДВОЙНЫМ КЛИКОМ по exe (аргументы там
+    # не передашь). Поставляемый .bat "открытый доступ" ставит IM_HOST=0.0.0.0.
+    # CLI-флаг, если он задан, всё равно старше окружения.
+    default_host = os.environ.get("IM_HOST", "127.0.0.1")
+    default_port = int(os.environ.get("IM_PORT", "8000"))
+
     ap = argparse.ArgumentParser(description="Веб-интерфейс анализатора документации")
-    ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--host", default="127.0.0.1",
+    ap.add_argument("--port", type=int, default=default_port)
+    ap.add_argument("--host", default=default_host,
                     help="адрес, на котором слушать. По умолчанию только этот "
-                         "компьютер. Открывать наружу - осознанное решение: "
-                         "авторизации в интерфейсе нет (см. предупреждение при "
-                         "запуске)")
+                         "компьютер (127.0.0.1). 0.0.0.0 - открыть доступ из "
+                         "сети (осознанное решение: авторизации в интерфейсе "
+                         "нет, см. предупреждение при запуске). Можно задать и "
+                         "переменной окружения IM_HOST/IM_PORT.")
     args = ap.parse_args()
+
+    if getattr(sys, "frozen", False):
+        local_cfg = ANALYZER_DIR / "config.local.yaml"
+        example_cfg = ANALYZER_DIR / "config.local.example.yaml"
+        if not local_cfg.exists() and example_cfg.exists():
+            shutil.copy2(example_cfg, local_cfg)
+            print(f"Создан {local_cfg} из образца - при необходимости "
+                  f"поправьте в нём адрес сервера ИИ.")
 
     QUEUE.start()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"Интерфейс анализатора: http://{args.host}:{args.port}")
+
+    # Адрес для БРАУЗЕРА - не тот, на котором слушаем: по 0.0.0.0 (слушать «на
+    # всех интерфейсах») подключиться нельзя, это не адрес назначения. С той же
+    # машины в браузер идёт localhost, а по сети - реальный IP компьютера.
+    browse_host = "localhost" if args.host in ("0.0.0.0", "::") else args.host
+    url = f"http://{browse_host}:{args.port}"
+    if args.host in ("0.0.0.0", "::"):
+        print(f"Интерфейс анализатора: {url} (с этого компьютера); "
+              f"по сети - http://<IP этого компьютера>:{args.port}")
+    else:
+        print(f"Интерфейс анализатора: {url}")
+
+    # Открываем браузер сами только в собранном exe: пользователь двойным
+    # кликом запускает программу и должен сразу увидеть интерфейс, а не
+    # догадываться, что нужно вручную набрать адрес. При запуске из консоли
+    # (python web_app/server.py) это осталось бы неожиданным - там открывают
+    # тот же адрес во вкладке, которая уже открыта.
+    if getattr(sys, "frozen", False):
+        import threading
+        import webbrowser
+        threading.Timer(0.7, lambda: webbrowser.open(url)).start()
     # Авторизации нет сознательно (инструмент корпоративный, сессии видны всем).
     # Пока сервер слушает localhost, это ничего не значит; открытый наружу - уже
     # значит: любой в сети сможет удалить чужую сессию или оборвать чужой прогон.

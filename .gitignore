@@ -5,6 +5,12 @@ __pycache__/
 .venv/
 venv/
 
+# Сборка портативной версии (PyInstaller): package.spec и build_dist.py в гите,
+# а результат сборки - нет (сотни МБ, пересобирается из исходников).
+/build/
+/dist/
+*.spec.log
+
 # Логи
 *.log
 

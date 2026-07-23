@@ -33,10 +33,9 @@ from pathlib import Path
 
 import bundles
 import script_loader
+from settings import PROJECT_ROOT
 
 logger = logging.getLogger(__name__)
-
-PROJECT_ROOT = Path(__file__).resolve().parent
 
 # Пометка типа в начале имени файла: "(scheme)...", "(netlist)..."
 TYPE_MARKER_RE = re.compile(r"^\s*\(\s*([^)]+?)\s*\)")

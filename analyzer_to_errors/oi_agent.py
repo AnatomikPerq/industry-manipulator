@@ -24,18 +24,20 @@ Open Interpreter сам решает, какой код написать и ис
 import json
 import logging
 import time
-from pathlib import Path
 
 from interpreter import OpenInterpreter
 
 import llm_client
 from llm_client import make_simple_ask_fn
 from schema import EXAMPLE_ERRORS, REPORT_SCHEMA
+from settings import PROJECT_ROOT
 from validation import JSONValidationError, get_validated_json
 
 logger = logging.getLogger(__name__)
 
-PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+# Промпты - обычные внешние файлы (не вкомпилированы в exe), потому что их
+# правит инженер, читая свежий отчёт, и правит часто (см. заголовок файла).
+PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
 
 def _prompt(name: str) -> str:
