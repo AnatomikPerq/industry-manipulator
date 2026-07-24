@@ -152,31 +152,13 @@ TITLE_SKIP = re.compile(
     re.I,
 )
 
-# Обозначение шкафа внутри наименования: аббревиатура из заглавных букв,
-# возможно с цифрой (ЩС1, ШУПЧ4, ВРУ, БУЗО, ПЭСПЗ, ЩРТХ). Латиница включена -
-# бюро мешает раскладки ("ЩC1" с латинской C встречается в реальных файлах).
-CABINET_RE = re.compile(r"\b([А-ЯЁA-Z]{2,7}\d{0,2})\b")
-
-# Слова, похожие на обозначение шкафа по форме, но им не являющиеся.
-CABINET_STOP = {
-    "СХЕМА", "ВИД", "ОБЩИЙ", "ПЛАН", "ЩИТ", "ШКАФ", "ШКАФА", "ЩИТА", "АВР",
-    "КИПИА", "ГОСТ", "ПЗ", "СО", "СБ", "НЛ", "МВТ", "КВТ", "ТОМ", "ЛИСТ",
-    "ДЛЯ", "НА", "И", "С", "ПО", "ОТМ", "УЗЛА", "УЧЕТА", "УЧЁТА",
-    "СПЕРЕДИ", "СЗАДИ", "СБОКУ", "СЛЕВА", "СПРАВА",
-}
-
-# Бюро мешает раскладки прямо внутри одного альбома: однолинейная схема
-# подписана "ЩC1" с ЛАТИНСКОЙ C, а принципиальная того же шкафа - "ЩС1" с
-# кириллической. Без приведения к одной раскладке это два разных ключа, то есть
-# две разные связки, и два документа ОДНОГО шкафа никогда не сверятся друг с
-# другом - молча, без единого сообщения об ошибке. Ровно тот сорт отказа, ради
-# которого в bundles.py запрещено угадывать связку по имени файла.
-#
-# Таблица омоглифов - общая с bundle_rules (normalize.py). Там сворачивают в
-# ЛАТИНИЦУ: нужен ключ сравнения, и направление безразлично. Здесь - в
-# КИРИЛЛИЦУ: обозначение шкафа становится именем папки и названием связки,
-# которое читает человек.
-_unify_layout = normalize.to_cyrillic
+# Обозначение шкафа (detect_cabinet, CABINET_RE, CABINET_STOP) переехало в
+# bundles.py: теперь его зовёт и web_app/sessions.py для автонейминга сессии по
+# именам файлов, а тот на голой стдлибе и full_project (с fitz) импортировать не
+# может. bundles.py - стдлиб и общее место для обоих. Реэкспортируем, чтобы
+# остальной модуль и тесты, зовущие full_project.detect_cabinet, не менялись.
+from bundles import (CABINET_RE, CABINET_STOP,  # noqa: F401,E402
+                     _unify_layout, detect_cabinet)
 
 
 def _norm(s: str) -> str:
@@ -406,38 +388,6 @@ def classify(title):
     return None, "наименование не опознано как документ известного вида"
 
 
-def detect_cabinet(title):
-    """Обозначение шкафа из наименования ("...принципиальная ЩС2" -> "ЩС2").
-
-    Шкаф - это ключ связки: в альбоме их до полутора десятков, и обозначения
-    в них пересекаются (1QF1 есть и в ШУПЧ1, и в ЩС1, но это РАЗНЫЕ аппараты).
-    Сверять их между собой нельзя, иначе bundle_rules выдаст вал ложных
-    "разный артикул у одного обозначения".
-    """
-    # Аббревиатура в скобках точнее прочего: "щит автоматики котла (ЩАК1)".
-    for chunk in re.findall(r"\(([^)]{2,12})\)", title):
-        m = CABINET_RE.fullmatch(chunk.strip())
-        if m and m.group(1).upper() not in CABINET_STOP:
-            return _unify_layout(m.group(1).upper())
-
-    # Иначе - последняя подходящая аббревиатура: наименование строится как
-    # "<вид документа> <объект>", и обозначение шкафа стоит в конце.
-    for m in reversed(list(CABINET_RE.finditer(title))):
-        token = m.group(1).upper()
-        if token in CABINET_STOP or token.isdigit():
-            continue
-        # Кусок составного кода объекта - не шкаф: в "ТТС-БМК-48000" средний
-        # сегмент по форме неотличим от обозначения щита, но это шифр всей
-        # котельной, и спецификация с таким "шкафом" уехала бы в собственную
-        # связку вместо общей.
-        before = title[m.start() - 1: m.start()]
-        after = title[m.end(): m.end() + 1]
-        if before == "-" or after == "-":
-            continue
-        return _unify_layout(token)
-    return None
-
-
 # Функциональный код объекта в наименовании: две-четыре ЛАТИНСКИЕ буквы и три
 # цифры (OS001, CC001, HQA001, UTG001). На "24-051-АК" коды приняты по
 # СТО Газпром 2-1.15-749-2013 - об этом прямо сказано на листе условных
@@ -631,7 +581,8 @@ def split_full_project(pdf_path, base_files_dir, scripts_dir):
     }
 
 
-def split_full_projects(full_projects_dir, base_files_dir, scripts_dir):
+def split_full_projects(full_projects_dir, base_files_dir, scripts_dir,
+                        explicit_types=None):
     """Все альбомы из папки full_projects -> документы в base_files.
 
     Папка исходников лежит ВНЕ base_files сознательно: base_files сканируется
@@ -639,19 +590,51 @@ def split_full_projects(full_projects_dir, base_files_dir, scripts_dir):
     положенный внутрь, стал бы "связкой" из одного нечитаемого файла на 200
     листов, который к тому же не прошёл бы определение типа и осел в
     skipped_files.
+
+    explicit_types: {имя файла в base_files: тип}, выставленные пользователем в
+    интерфейсе. Файл с явным КОНКРЕТНЫМ типом (scheme/assembly/...) в альбом НЕ
+    превращается, даже если в нём ≥80 листов: пометка пользователя главнее
+    догадки по числу листов. Это симметрично прежнему правилу «помечен как
+    альбом → альбом даже короче порога» (prepare_run).
     """
     full_projects_dir = Path(full_projects_dir)
     base_files_dir = Path(base_files_dir)
 
-    albums = collect_albums(base_files_dir, full_projects_dir)
+    albums = collect_albums(base_files_dir, full_projects_dir, explicit_types)
     if not albums:
         return []
 
     clear_generated_parts(base_files_dir)
-    return [split_full_project(p, base_files_dir, scripts_dir) for p in albums]
+    reports = [split_full_project(p, base_files_dir, scripts_dir) for p in albums]
+    _write_parts_sidecar(base_files_dir, reports)
+    return reports
 
 
-def collect_albums(base_files_dir, full_projects_dir):
+def _write_parts_sidecar(base_files_dir, reports):
+    """Сайдкар «часть -> страницы альбома» для интерфейса (bundles.ALBUM_PARTS_FILE).
+
+    Пишется свежим на каждую нарезку (clear_generated_parts уже стёр прошлые
+    части), ключ - путь части относительно base_files, тот же, каким web_app
+    адресует файл. web_app открыть PDF не может, а номер страницы у части знаем
+    здесь, где уже есть fitz."""
+    import json
+
+    index = {}
+    for rep in reports:
+        for part in rep.get("parts_written", []):
+            index[part["file"]] = {
+                "first_page": part["first_page"],
+                "last_page": part["last_page"],
+                "source_file": rep.get("source_file"),
+            }
+    try:
+        (Path(base_files_dir) / bundles.ALBUM_PARTS_FILE).write_text(
+            json.dumps(index, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError as e:
+        logger.warning("Не удалось записать сайдкар страниц частей альбома: %s", e)
+
+
+def collect_albums(base_files_dir, full_projects_dir, explicit_types=None):
     """Альбомы, которые надо разрезать: из папки full_projects и из base_files.
 
     Разбирать base_files тоже приходится потому, что интерфейс кладёт туда ВСЁ,
@@ -664,9 +647,16 @@ def collect_albums(base_files_dir, full_projects_dir):
     следом попыталась бы разобрать его как обычный документ, не смогла бы
     определить тип и молча положила в skipped_files - рядом с уже нарезанными
     из него же частями.
+
+    explicit_types: файлы с явным типом от пользователя (см. split_full_projects).
+    Файл, помеченный КОНКРЕТНЫМ типом, из base_files не забираем даже при ≥80
+    листах: большая принципиальная схема остаётся схемой, если пользователь так
+    сказал. Пометка «полный проект» сюда не попадает - её файл перенёс в
+    full_projects уже prepare_run.
     """
     base_files_dir = Path(base_files_dir)
     full_projects_dir = Path(full_projects_dir)
+    explicit_types = explicit_types or {}
 
     albums = []
     if full_projects_dir.is_dir():
@@ -679,6 +669,11 @@ def collect_albums(base_files_dir, full_projects_dir):
     if base_files_dir.is_dir():
         for path in sorted(base_files_dir.glob("*.pdf")):
             if path.name.startswith((".", "~$")) or not is_full_project(path):
+                continue
+            if path.name in explicit_types:
+                logger.info("%s: ≥%d листов, но помечен пользователем как '%s' - "
+                            "не превращаю в альбом", path.name,
+                            FULL_PROJECT_MIN_PAGES, explicit_types[path.name])
                 continue
             full_projects_dir.mkdir(parents=True, exist_ok=True)
             moved = full_projects_dir / path.name

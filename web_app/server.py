@@ -116,7 +116,7 @@ from lmstudio import LMStudioError        # noqa: E402
 from sessions import FULL_PROJECT_TYPE, SessionError, SessionStore  # noqa: E402
 from users import UserError, UserStore, canon  # noqa: E402
 
-PROJECT_VERSION = "V2.2 beta"
+PROJECT_VERSION = "V2.3"
 
 # Имя cookie с токеном входа. Токен кладём именно в cookie, а не в localStorage:
 # исходные документы, PDF-отчёт и фрагменты чертежа открываются НАТИВНО браузером
@@ -783,7 +783,16 @@ class Handler(BaseHTTPRequestHandler):
         if mode not in queue_worker.MODES:
             raise SessionError(f"Неизвестный режим: {mode}", 400)
         position = QUEUE.enqueue(session_id, mode)
-        self._send_json({"ok": True, "mode": mode, "queue_position": position})
+        # Безымянную сессию называем по загруженным файлам + режиму - только
+        # после успешной постановки в очередь (enqueue проверяет наличие файлов).
+        # Это ловит подпапки-связки и явно помеченный альбом СРАЗУ; авто-
+        # опознанный по числу листов альбом виден только после прогона, поэтому
+        # автонейминг повторяется и по завершении (queue_worker._run_session).
+        new_name = STORE.auto_name(session_id, queue_worker.MODE_LABELS.get(mode))
+        resp = {"ok": True, "mode": mode, "queue_position": position}
+        if new_name:
+            resp["name"] = new_name
+        self._send_json(resp)
 
     def _api_log(self, session_id, since):
         """Лог отдаём порциями по смещению: браузер присылает номер строки, на
@@ -806,6 +815,8 @@ class Handler(BaseHTTPRequestHandler):
             "stage": meta.get("stage"),
             "progress": meta.get("progress"),
             "llm_position": QUEUE.llm_positions().get(session_id),
+            # скорость генерации сервера ИИ (токенов/с) за последний вызов
+            "llm_tps": meta.get("llm_tps"),
         })
 
     # ---- просмотр исходных документов ----

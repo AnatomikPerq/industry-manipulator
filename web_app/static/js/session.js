@@ -64,6 +64,8 @@ export async function loadSession() {
     // шкафа к шкафу (у каждого свой «Общий вид»), и по имени сервер открыл бы
     // или удалил не тот файл
     path: f.path, generated: !!f.generated,
+    // для нарезанной части - {first_page, last_page} альбома, откуда она вырезана
+    pages: f.pages || null,
   }));
   $("crumb-name").textContent = meta.name;
   $("crumb-status").outerHTML = statusBadge(meta).replace(
@@ -116,6 +118,10 @@ export function renderSessionStatus() {
       // сама решает, какой файл открыть. Поэтому не «или-или», а «если есть».
       const detail = progressText(m);
       text = detail ? `Анализ нейросетями: ${detail}` : "Анализ нейросетями…";
+      // Скорость генерации показываем ПРЯМО в строке статуса (а не только в
+      // отладке): во время прогона пользователь смотрит сюда, а раздел отладки
+      // ниже сгиба. Счётчик — по последнему завершённому вызову сервера ИИ.
+      if (m.llm_tps != null) text += ` · ${m.llm_tps} ток/с`;
     } else {
       const detail = progressText(m);
       text = detail ? `Работают скрипты: ${detail}` : `Идёт анализ… (режим: ${mode})`;
@@ -138,6 +144,27 @@ export function renderSessionStatus() {
   }
   updateRunEnabled();
   updateLogButton();
+  updateTps();
+}
+
+// Счётчик скорости генерации сервера ИИ (токенов/с) за последний вызов - тот же
+// показатель, что в обычном чате, но для стадии ИИ анализа. Живого потока токенов
+// здесь нет (агенты работают внутри Open Interpreter), поэтому это средняя по
+// последнему завершённому обращению - см. analyzer_to_errors/llm_stats.py.
+// Показываем только пока сессия считается и число уже пришло; по завершении
+// прогона сервер обнуляет llm_tps, и счётчик прячется.
+export function updateTps() {
+  const el = $("session-tps");
+  if (!el) return;
+  const m = S.meta;
+  const tps = m && m.llm_tps;
+  if (m && m.status === "running" && tps != null) {
+    el.textContent = `${tps} ток/с`;
+    el.classList.remove("hidden");
+  } else {
+    el.textContent = "";
+    el.classList.add("hidden");
+  }
 }
 
 // Кнопка «Лог LM Studio» активна, только когда прогон с участием ИИ уже начался:
@@ -173,6 +200,7 @@ export function startSessionPolling() {
       status: data.status, error: data.error,
       n_findings: data.n_findings, queue_position: data.queue_position,
       stage: data.stage, progress: data.progress, llm_position: data.llm_position,
+      llm_tps: data.llm_tps,
     });
     if (data.status !== wasStatus) {
       $("crumb-status").outerHTML = statusBadge(S.meta).replace(
@@ -201,6 +229,14 @@ export function startSessionPolling() {
       if (data.status === "done") await showReport();
     }
   }, 1000);
+}
+
+// Подпись диапазона страниц альбома для части: «л. 40–50» или «л. 27».
+export function pageRangeLabel(pages) {
+  if (!pages || pages.first_page == null) return "";
+  const a = pages.first_page;
+  const b = pages.last_page;
+  return b && b !== a ? `л. ${a}–${b}` : `л. ${a}`;
 }
 
 // ------------------------------------------------------------
@@ -237,6 +273,12 @@ export function renderFiles() {
     const gen = f.generated
       ? `<span class="fi-gen" title="Этот документ вырезан из загруженного альбома. Удалять по одному не нужно — при следующем запуске альбом будет нарезан заново">из альбома</span>`
       : "";
+    // Диапазон страниц альбома, из которых вырезана эта часть. Показываем справа,
+    // рядом с размером: инженеру видно, где искать документ в исходном альбоме.
+    const pages = pageRangeLabel(f.pages);
+    const pagesTag = pages
+      ? `<span class="fi-pages" title="Страницы исходного альбома, из которых вырезан этот документ">${esc(pages)}</span>`
+      : "";
     // Документ, который скрипты разбирают прямо сейчас. Сверяем по пути, а не
     // по имени: в альбоме у каждого шкафа своё «Общий вид», и по имени
     // подсветилось бы сразу несколько строк.
@@ -252,6 +294,7 @@ export function renderFiles() {
         <a class="fi-name" href="${href}" target="_blank" rel="noopener"
            title="Открыть «${esc(f.name)}» в новой вкладке">${esc(f.name)}</a>
         ${activeTag}${bundle}${gen}
+        ${pagesTag}
         <span class="fi-size">${fmtSize(f.size)}</span>
         <select data-idx="${i}" class="${f.type ? "" : "unset"}" ${locked ? "disabled" : ""}>${opts}</select>
         <button class="fi-del" data-del="${i}" title="Удалить файл из сессии"
@@ -363,6 +406,12 @@ export async function enqueue(mode) {
     S.meta.status = "queued";
     S.meta.mode = mode;
     S.meta.queue_position = data.queue_position;
+    // Сервер мог сам назвать безымянную сессию по файлам + режиму (автонейминг):
+    // подхватываем новое имя в хлебные крошки.
+    if (data.name) {
+      S.meta.name = data.name;
+      $("crumb-name").textContent = data.name;
+    }
     renderFiles();          // на время прогона файлы менять нельзя
     renderSessionStatus();
     startSessionPolling();

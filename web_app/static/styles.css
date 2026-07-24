@@ -160,8 +160,13 @@ header img.logo { height: 64px; width: auto; display: block; }
 
 /* ---------- Раскладка ---------- */
 main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
-.grid { display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; align-items: start; }
-@media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
+/* minmax(0, …), а не голые fr: иначе колонка вырастает до МИН-КОНТЕНТА своего
+   содержимого, а у документа из альбома имя длинное ("(functional)Функциональная
+   схема автоматизации отопления и вентиляции…"), и колонка раздувала весь грид
+   шире окна - у страницы появлялась горизонтальная полоса. С minmax(0, …) колонка
+   держит свою долю, а имя честно обрезается многоточием (fi-name уже так настроен). */
+.grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+@media (max-width: 1000px) { .grid { grid-template-columns: minmax(0, 1fr); } }
 
 .card {
   background: var(--paper);
@@ -389,6 +394,24 @@ main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
 
 .table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--field); }
 table.report { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 1400px; font-size: 12.5px; }
+
+/* Отчёт с находками на ШИРОКОМ экране вырывается из 1500px-колонки контента и
+   занимает почти всю ширину окна. У таблицы находок много колонок (у сверки
+   «таблица подключений ↔ схема» их тринадцать), её естественная ширина ~1700px
+   и в 1500px-колонку не влезает - снизу висела лишняя полоса прокрутки даже на
+   большом мониторе. Теперь на широком экране места хватает и полоса не нужна;
+   на узком (ниже брейкпоинта) отчёт остаётся в колонке и прокручивается, как
+   раньше. Вырыв - стандартной формулой отрицательных полей относительно
+   контентной колонки (100% = её ширина). Инсет в 56px оставляет поля от краёв
+   окна и прячется от ширины вертикального скроллбара, чтобы не появилась
+   горизонтальная полоса у всей страницы. */
+@media (min-width: 1560px) {
+  #report-section.show {
+    width: calc(100vw - 56px);
+    margin-left: calc(-0.5 * (100vw - 56px - 100%));
+    margin-right: calc(-0.5 * (100vw - 56px - 100%));
+  }
+}
 table.report th, table.report td {
   border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
   padding: 7px 9px; vertical-align: top; text-align: left;
@@ -518,6 +541,12 @@ a.fi-name:hover { color: var(--blue-dark); border-bottom-color: var(--blue); }
 .file-item .fi-gen {
   flex: none; font-size: 11px; font-weight: 600; color: var(--muted);
   background: var(--chip); border: 1px solid var(--line); border-radius: 10px; padding: 1px 8px;
+}
+/* страницы исходного альбома, из которых вырезана часть */
+.file-item .fi-pages {
+  flex: none; font-size: 11px; font-weight: 600; color: var(--orange-dark);
+  background: var(--orange-soft); border: 1px solid #f4c893;
+  border-radius: 10px; padding: 1px 8px; white-space: nowrap;
 }
 
 /* ============================================================
@@ -873,6 +902,78 @@ body.unauthed > header, body.unauthed > main { display: none; }
   white-space: pre-wrap; word-break: break-word;
   max-height: 260px; overflow-y: auto;
 }
+
+/* ---------- Чат: разметка Markdown/LaTeX в ответе модели ---------- */
+/* У размеченного ответа переносы задаются блочными тегами, поэтому pre-wrap
+   (наследуемый от .chat-text) здесь убираем - иначе \n между блоками дают
+   пустые строки. Сообщение пользователя остаётся .chat-text без .md. */
+.chat-text.md { white-space: normal; }
+.chat-text.md > :first-child { margin-top: 0; }
+.chat-text.md > :last-child { margin-bottom: 0; }
+.chat-text.md p { margin: 0 0 8px; }
+.chat-text.md h1, .chat-text.md h2, .chat-text.md h3,
+.chat-text.md h4, .chat-text.md h5, .chat-text.md h6 {
+  margin: 12px 0 6px; line-height: 1.25; font-weight: 700;
+}
+.chat-text.md h1 { font-size: 1.35em; }
+.chat-text.md h2 { font-size: 1.22em; }
+.chat-text.md h3 { font-size: 1.1em; }
+.chat-text.md h4, .chat-text.md h5, .chat-text.md h6 { font-size: 1em; }
+.chat-text.md ul, .chat-text.md ol { margin: 0 0 8px; padding-left: 22px; }
+.chat-text.md li { margin: 2px 0; }
+.chat-text.md blockquote {
+  margin: 0 0 8px; padding: 2px 12px; border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+.chat-text.md a { color: var(--blue-dark); text-decoration: underline; }
+.chat-msg.user .chat-text.md a { color: #fff; }
+.chat-text.md hr { border: 0; border-top: 1px solid var(--line); margin: 12px 0; }
+.chat-text.md code.md-code {
+  font-family: ui-monospace, Consolas, monospace; font-size: 0.9em;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 5px;
+  padding: 1px 5px;
+}
+.chat-text.md pre.md-pre {
+  margin: 0 0 8px; padding: 10px 12px; border-radius: 8px; overflow-x: auto;
+  background: var(--panel); border: 1px solid var(--line);
+}
+.chat-text.md pre.md-pre code {
+  font-family: ui-monospace, Consolas, monospace; font-size: 12.5px;
+  background: none; border: 0; padding: 0; white-space: pre;
+}
+.chat-text.md table.md-table {
+  border-collapse: collapse; margin: 0 0 8px; font-size: 0.95em;
+  display: block; overflow-x: auto; max-width: 100%;
+}
+.chat-text.md table.md-table th, .chat-text.md table.md-table td {
+  border: 1px solid var(--line); padding: 4px 9px; text-align: left;
+}
+.chat-text.md table.md-table th { background: var(--panel); font-weight: 600; }
+.chat-msg.user .chat-text.md code.md-code,
+.chat-msg.user .chat-text.md pre.md-pre {
+  background: rgba(255,255,255,.15); border-color: rgba(255,255,255,.3);
+}
+/* строка ошибки под частичным ответом */
+.chat-err-line { margin-top: 8px; color: var(--crit); font-weight: 600; }
+.chat-msg.user .chat-err-line { color: #ffe3df; }
+
+/* ---------- Базовый LaTeX (см. static/js/markdown.js) ---------- */
+.tex { font-family: "Cambria Math", "Times New Roman", Georgia, serif; }
+.tex-block { display: block; text-align: center; margin: 6px 0; font-size: 1.05em; }
+.tex-frac {
+  display: inline-flex; flex-direction: column; align-items: center;
+  vertical-align: middle; margin: 0 2px; line-height: 1.1;
+}
+.tex-frac .tex-num { padding: 0 4px; }
+.tex-frac .tex-den { padding: 0 4px; border-top: 1px solid currentColor; }
+.tex-sqrt > .tex-rad {
+  border-top: 1px solid currentColor; padding: 0 2px; margin-left: 1px;
+}
+.tex-root-idx { font-size: 0.7em; vertical-align: 0.6em; }
+.tex-rm { font-style: normal; font-family: inherit; }
+.tex-bf { font-weight: 700; }
+.tex-it { font-style: italic; }
+.tex sup, .tex sub { font-size: 0.72em; }
 
 /* ---------- Настройки ИИ (модалка администратора) ---------- */
 /* Модалка использует ту же оболочку, что «Пользователи» (.users-modal) */

@@ -106,6 +106,17 @@ PROGRESS_MARKER = "@@PROGRESS"
 # и исполняться как полный).
 MODES = ("scripts", "full", "visual", "full_visual")
 
+# Как режим называется по-русски - для автонейминга безымянной сессии
+# (SessionStore.auto_name). Живёт рядом с MODES по той же причине: подпись и
+# список режимов - об одном и том же, и разъехаться им нельзя. Сервер и фронтенд
+# берут подписи отсюда же (в session.js своя копия - там без импорта с бэкенда).
+MODE_LABELS = {
+    "scripts": "без ИИ",
+    "full": "полный анализ",
+    "visual": "визуальный анализ",
+    "full_visual": "полный + визуальный",
+}
+
 
 def run_flags(mode: str) -> dict:
     """Режим интерфейса -> аргументы run_pipeline."""
@@ -241,7 +252,7 @@ class AnalysisQueue:
         self.store.update(session_id, status="queued", mode=mode,
                           queued_at=time.time(), started_at=None, finished_at=None,
                           n_findings=None, error=None, stage=None, progress=None,
-                          llm_position=None)
+                          llm_position=None, llm_tps=None)
         with self._cv:
             self._cancelled.discard(session_id)
             self._pending.append(session_id)
@@ -440,7 +451,7 @@ class AnalysisQueue:
             self.store.update(session_id, status="cancelled",
                               error="Анализ отменён пользователем",
                               finished_at=time.time(), stage=None, progress=None,
-                              llm_position=None)
+                              llm_position=None, llm_tps=None)
             return
 
         if result is not None and result.get("ok"):
@@ -448,7 +459,21 @@ class AnalysisQueue:
             log(f"=== Готово. Найдено замечаний: {n} ===")
             self.store.update(session_id, status="done", n_findings=n,
                               error=None, finished_at=time.time(),
-                              stage=None, progress=None, llm_position=None)
+                              stage=None, progress=None, llm_position=None,
+                              llm_tps=None)
+            # Автонейминг ПОВТОРЯЕМ здесь, а не только при постановке в очередь:
+            # альбом опознаётся по числу листов уже ВНУТРИ прогона (web_app PDF
+            # открыть не может) и переезжает в full_projects только тогда - при
+            # enqueue его ещё не видно. Теперь full_projects и нарезанные связки
+            # на месте, и безымянная сессия получает имя. Idempotent: названную
+            # пользователем не трогает.
+            try:
+                named = self.store.auto_name(
+                    session_id, MODE_LABELS.get(mode))
+                if named:
+                    log(f"=== Сессия названа автоматически: {named} ===")
+            except SessionError:
+                pass
             return
 
         if result is not None and not result.get("ok"):
@@ -456,7 +481,7 @@ class AnalysisQueue:
             log("!!! " + err)
             self.store.update(session_id, status="error", error=err,
                               finished_at=time.time(), stage=None, progress=None,
-                              llm_position=None)
+                              llm_position=None, llm_tps=None)
             return
 
         # процесс завершился, не оставив result.json - упал неожиданно
@@ -464,7 +489,7 @@ class AnalysisQueue:
         log("!!! " + err)
         self.store.update(session_id, status="error", error=err,
                           finished_at=time.time(), stage=None, progress=None,
-                          llm_position=None)
+                          llm_position=None, llm_tps=None)
 
     def _pass_llm_gate(self, session_id, proc, log) -> bool:
         """Подпроцесс досчитал скрипты и просится к серверу ИИ.
@@ -504,6 +529,17 @@ class AnalysisQueue:
         except (json.JSONDecodeError, ValueError):
             return
         kind = payload.get("kind")
+
+        # Скорость генерации сервера ИИ (токенов/с) за последний вызов - отдельным
+        # полем llm_tps, а не внутри progress: она живёт своей жизнью и не должна
+        # обнуляться при смене листа. Троттлинг ей не нужен - вызовов модели не
+        # десятки в секунду (см. analyzer_to_errors/llm_stats.py).
+        if kind == "llm_stats":
+            try:
+                self.store.update(session_id, llm_tps=payload.get("tps"))
+            except SessionError:
+                pass
+            return
 
         # Придерживаем запись: листы летят десятками в секунду, а браузер
         # опрашивает статус раз в секунду - чаще писать файл незачем. Смену

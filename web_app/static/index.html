@@ -66,7 +66,7 @@
     <div class="header-right">
       <div class="theme-switch" id="theme-switch-header"></div>
       <div class="user-area" id="user-area"></div>
-      <span class="version-badge" id="version-badge">V2.2 beta</span>
+      <span class="version-badge" id="version-badge">V2.3</span>
     </div>
   </header>
 
@@ -240,6 +240,8 @@
                     title="Полный транскрипт обмена с сервером ИИ за последний прогон — откроется в новой вкладке">Лог LM Studio</button>
             <button class="btn" id="btn-show-report">Вывести отчёт сессии</button>
             <button class="btn btn-ghost" id="btn-clear-console">Очистить консоль</button>
+            <span class="chat-tps hidden" id="session-tps"
+                  title="Скорость генерации сервера ИИ за последний вызов (стадия анализа нейросетями)"></span>
           </div>
 
           <div class="llm-panel" id="llm-panel"></div>
@@ -423,7 +425,7 @@
 
     <footer class="app-footer">
       <b>ИНДУСТРИЯ МАНИПУЛЯТОР</b> · Анализатор проектной документации ·
-      <span id="footer-version">V2.2 beta</span>
+      <span id="footer-version">V2.3</span>
     </footer>
   </main>
 

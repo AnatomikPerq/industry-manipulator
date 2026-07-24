@@ -80,6 +80,11 @@ ALLOWED_SUFFIXES = {".pdf", ".xlsx", ".xlsm"}
 # типа документа у ingest.py нет.
 FULL_PROJECT_TYPE = "full_project"
 
+# Имена, которые считаются «сессию ещё не назвали»: их автонейминг вправе
+# заменить, а данное пользователем имя - никогда. "Новая сессия" тут на случай,
+# если её так подставит интерфейс; "Без названия" ставит create по умолчанию.
+DEFAULT_SESSION_NAMES = {"", "без названия", "новая сессия"}
+
 # draft     - создана, пользователь докладывает файлы
 # queued    - поставлена в очередь, ждёт воркера
 # running   - выполняется прямо сейчас
@@ -292,6 +297,8 @@ class SessionStore:
                 # какой документ и какой его лист читает парсер (см. progress.py)
                 "progress": None,
                 "llm_position": None,
+                # скорость генерации сервера ИИ (токенов/с) за последний вызов
+                "llm_tps": None,
             }
             self._write_meta(meta)
             return meta
@@ -384,6 +391,113 @@ class SessionStore:
             raise SessionError("Пустое название сессии", 400)
         return self.update(session_id, name=name)
 
+    def auto_name(self, session_id, mode_label=None) -> str:
+        """Даёт сессии имя по загруженным файлам, ЕСЛИ пользователь её не назвал.
+
+        Зовётся при запуске анализа. Правило (запрос заказчика): у безымянной
+        сессии имя = «имя альбома» (для полного проекта) или «обозначение(я)
+        шкафа» (для связок-подпапок) плюс выбранный режим анализа. Данное
+        пользователем имя не трогаем; выводить не из чего - оставляем как есть.
+
+        Возвращает новое имя либо None (ничего не поменяли).
+        """
+        with self._lock:
+            current = (self._read_meta(session_id).get("name") or "").strip()
+        if current.lower() not in DEFAULT_SESSION_NAMES:
+            return None
+        base = self._name_base(session_id)
+        if not base:
+            return None
+        name = f"{base} · {mode_label}" if mode_label else base
+        name = name.strip()[:120]
+        self.update(session_id, name=name)
+        return name
+
+    def _name_base(self, session_id) -> str:
+        """Основа имени сессии из её файлов: имя альбома либо обозначение шкафа.
+
+        По убыванию явности:
+          1. Альбом (полный проект) - имя файла. Он в full_projects/ (куда его
+             перенёс прошлый прогон или перенесёт prepare_run по пометке типа).
+          2. Файл, помеченный пользователем как альбом, ещё лежащий в base_files
+             (переезд делает prepare_run уже в прогоне) - имя файла.
+          3. Связки-подпапки base_files (кроме нарезанных из альбома - у них своя
+             метка) - имена папок, которые задал пользователь.
+          4. ПЛОСКИЙ комплект на один шкаф (файлы прямо в base_files, без
+             подпапок) - обозначение шкафа из ИМЁН файлов ("...ЩСКЗ СБ",
+             "...ЩСКЗ СО" -> ЩСКЗ). См. _cabinet_from_flat_files.
+        Не нашлось ничего - None (имя не трогаем).
+        """
+        paths = self.paths_of(session_id)
+
+        fp = paths["full_projects_dir"]
+        if fp.is_dir():
+            albums = sorted(p.stem for p in fp.iterdir()
+                            if p.is_file() and p.suffix.lower() == ".pdf"
+                            and not p.name.startswith((".", "~$")))
+            if albums:
+                return albums[0]
+
+        for key, doc_type in self._doc_types(session_id).items():
+            if doc_type == FULL_PROJECT_TYPE:
+                return Path(key).stem
+
+        base = paths["base_files_dir"]
+        cabinets = []
+        if base.is_dir():
+            for sub in sorted(base.iterdir()):
+                if (not sub.is_dir() or sub.name.startswith((".", "~$"))
+                        or (sub / bundles.GENERATED_MARKER).exists()):
+                    continue      # нарезанные из альбома части - не «шкаф» пользователя
+                if any(p.is_file() and p.suffix.lower() in ALLOWED_SUFFIXES
+                       for p in sub.rglob("*")):
+                    cabinets.append(sub.name)
+        if cabinets:
+            head = ", ".join(cabinets[:3])
+            return head + ("…" if len(cabinets) > 3 else "")
+
+        return self._cabinet_from_flat_files(session_id)
+
+    def _cabinet_from_flat_files(self, session_id) -> str:
+        """Обозначение шкафа из имён файлов ПЛОСКОГО комплекта (одна связка на
+        один шкаф, файлы прямо в base_files, без подпапок).
+
+        Комплект грузят россыпью файлов; связка у них одна ("проект"), но в
+        ИМЕНАХ шкаф назван у каждого документа ("...ЩСКЗ СБ", "...ЩСКЗ СО",
+        "...ЩСКЗ ЭЗ"). Берём обозначение, общее для большинства файлов.
+
+        Угадывать связку по имени файла в bundles.py ЗАПРЕЩЕНО - ошибка там молча
+        ломает сверку. Здесь другое: не РАЗБИВАЕМ на связки, а ИМЕНУЕМ сессию.
+        Неверная догадка даёт лишь неточное имя, которое пользователь
+        переименует, - поэтому эвристика тут допустима. Марку вида убираем той же
+        регуляркой, что и ingest (KIND_MARK_RE), чтобы «СБ»/«Э3» не спутались с
+        обозначением; обозначение достаёт общий bundles.detect_cabinet.
+        """
+        import ingest  # ленивый импорт, как в files(): analyzer уже в sys.path
+        from collections import Counter
+
+        base = self.paths_of(session_id)["base_files_dir"]
+        if not base.is_dir():
+            return None
+        votes = Counter()
+        for p in sorted(base.iterdir()):
+            if (not p.is_file() or p.suffix.lower() not in ALLOWED_SUFFIXES
+                    or p.name.startswith(("~$", "."))):
+                continue
+            # 1) убрать марку вида (СБ/СО/Э3/СХ/NL) - её регуляркой ingest, ей
+            #    нужны исходные разделители; 2) разделители имени файла (._-) ->
+            #    пробелы. detect_cabinet заточена под НАИМЕНОВАНИЕ штампа и
+            #    пропускает токен, прижатый к дефису (сегмент кода объекта
+            #    «ТТС-БМК-48000»), - а в ИМЕНИ файла шкаф как раз и стоит через
+            #    дефис («ИК.3912-АТХ2»). Разровняв разделители, отдаём ей уже
+            #    «наименованиеподобную» строку и не трогаем сам album-путь.
+            stem = ingest.KIND_MARK_RE.sub(" ", p.stem)
+            stem = re.sub(r"[._\-]+", " ", stem)
+            cabinet = bundles.detect_cabinet(stem)
+            if cabinet:
+                votes[cabinet] += 1
+        return votes.most_common(1)[0][0] if votes else None
+
     def restore_after_restart(self) -> list:
         """Приводит статусы в чувство после перезапуска сервера и возвращает
         сессии, которые надо вернуть в очередь (в порядке постановки).
@@ -400,7 +514,7 @@ class SessionStore:
                 if meta["status"] == "running":
                     self.update(meta["id"], status="interrupted",
                                 finished_at=time.time(), stage=None, progress=None,
-                                llm_position=None,
+                                llm_position=None, llm_tps=None,
                                 error="Сервер был перезапущен во время анализа")
                     self.append_log(meta["id"],
                                     "!!! Сервер был перезапущен - прогон прерван")
@@ -430,6 +544,7 @@ class SessionStore:
         data_dir = paths["data_dir"]
         base = paths["base_files_dir"]
         overrides = self._doc_types(session_id)
+        parts_pages = self._album_parts(session_id)
         files = []
         if base.is_dir():
             for p in sorted(base.rglob("*")):
@@ -452,6 +567,8 @@ class SessionStore:
                     # её тип уже проставлен пометкой в имени, удалять её по
                     # одной бессмысленно (следующий прогон нарежет заново)
                     "generated": self._is_generated_part(p),
+                    # для нарезанной части - из каких страниц альбома она вырезана
+                    "pages": parts_pages.get(rel.as_posix()),
                 })
 
         # Альбомы. Показываются вместе с остальными файлами, хотя лежат в другой
@@ -568,6 +685,23 @@ class SessionStore:
             meta["doc_types"] = types
             self._write_meta(meta)
             return types
+
+    def _album_parts(self, session_id) -> dict:
+        """Карта «путь части относительно base_files -> {first_page, last_page,
+        source_file}» из сайдкара нарезки (bundles.ALBUM_PARTS_FILE).
+
+        Сайдкар пишет full_project.split_full_projects (там есть fitz и номера
+        листов); здесь только читаем - на голой стдлибе. Нет файла или он битый -
+        пустая карта: страницы части исчезнут из интерфейса, но список файлов
+        всё равно построится."""
+        sidecar = self.paths_of(session_id)["base_files_dir"] / bundles.ALBUM_PARTS_FILE
+        if not sidecar.is_file():
+            return {}
+        try:
+            data = json.loads(sidecar.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (json.JSONDecodeError, OSError):
+            return {}
 
     @staticmethod
     def _is_generated_part(path: Path) -> bool:

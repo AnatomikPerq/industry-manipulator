@@ -15,6 +15,7 @@
    ============================================================ */
 
 import { $, esc, fetchJSON, showView } from "./util.js";
+import { renderMarkdown } from "./markdown.js";
 
 let chat = null;          // активный чат {id, model, messages:[...]}
 let models = [];          // модели сервера (с флагами loaded/vision)
@@ -150,12 +151,14 @@ function emptyPlaceholder() {
   return d;
 }
 
-// DOM-узел одного сообщения. Строим узлами, а не innerHTML: текст ответа модели
-// дорисовывается потоком через textContent, и любая разметка внутри него должна
-// остаться текстом, а не исполниться.
+// DOM-узел одного сообщения. Ответ модели (bot) размечается как Markdown/LaTeX
+// (renderMarkdown сам экранирует вход — модели не доверяем), сообщение
+// пользователя показываем как есть, простым текстом: его Markdown толковать
+// незачем, а так виден ровно введённый текст.
 function messageEl(msg) {
   const row = document.createElement("div");
-  row.className = "chat-msg " + (msg.role === "user" ? "user" : "bot");
+  const isUser = msg.role === "user";
+  row.className = "chat-msg " + (isUser ? "user" : "bot");
 
   const bubble = document.createElement("div");
   bubble.className = "chat-bubble";
@@ -163,8 +166,9 @@ function messageEl(msg) {
   for (const node of fileEls(msg.files || [])) bubble.appendChild(node);
 
   const txt = document.createElement("div");
-  txt.className = "chat-text";
-  txt.textContent = msg.content || "";
+  txt.className = "chat-text" + (isUser ? "" : " md");
+  if (isUser) txt.textContent = msg.content || "";
+  else txt.innerHTML = renderMarkdown(msg.content || "");
   if (msg.content) bubble.appendChild(txt);
 
   row.appendChild(bubble);
@@ -308,7 +312,7 @@ async function sendMessage() {
   const botRow = messageEl({ role: "assistant", content: "", files: [] });
   const bubble = botRow.querySelector(".chat-bubble");
   const txt = document.createElement("div");
-  txt.className = "chat-text streaming";
+  txt.className = "chat-text md streaming";
   bubble.appendChild(txt);
   box.appendChild(botRow);
   scrollBottom();
@@ -317,6 +321,7 @@ async function sendMessage() {
   setTps(null);
   abort = new AbortController();
   let acc = "";
+  let errored = false;    // модель/сервер вернули ошибку в потоке
   let thinkBody = null;   // тело блока рассуждения — создаётся по первому reasoning
   try {
     const res = await fetch("/api/chat/send", {
@@ -345,7 +350,10 @@ async function sendMessage() {
         try { ev = JSON.parse(line); } catch { continue; }
         if (ev.type === "delta") {
           acc += ev.text;
-          txt.textContent = acc;
+          // Размечаем на лету: renderMarkdown дешёв на типичной длине ответа,
+          // и незакрытые конструкции (недопечатанный код/формула) просто
+          // отрисуются как текст, пока не закроются следующими чанками.
+          txt.innerHTML = renderMarkdown(acc);
           scrollBottom();
         } else if (ev.type === "reasoning") {
           if (!thinkBody) thinkBody = ensureThinkBody(bubble);
@@ -355,11 +363,11 @@ async function sendMessage() {
           setTps(ev.tps);
         } else if (ev.type === "error") {
           markError(txt, acc, ev.error);
-          acc = txt.textContent;
+          errored = true;
         }
       }
     }
-    if (!acc.trim() && !txt.classList.contains("chat-err")) {
+    if (!acc.trim() && !errored) {
       markError(txt, "", "модель вернула пустой ответ");
     }
     // История на диске уже дописана сервером; локально она у нас и так есть.
@@ -385,10 +393,16 @@ async function sendMessage() {
   }
 }
 
+// Ошибка в потоке. Уже полученную часть ответа сохраняем размеченной (модель
+// могла успеть написать полезное), а сообщение об ошибке добавляем отдельной
+// строкой снизу - чтобы не красить в красный весь ответ.
 function markError(txt, partial, message) {
-  txt.classList.add("chat-err");
-  txt.textContent = (partial ? partial + "\n\n" : "")
-    + "⚠ Ошибка: " + message;
+  txt.classList.remove("streaming");
+  txt.innerHTML = partial ? renderMarkdown(partial) : "";
+  const err = document.createElement("div");
+  err.className = "chat-err-line";
+  err.textContent = "⚠ Ошибка: " + message;
+  txt.appendChild(err);
   scrollBottom();
 }
 

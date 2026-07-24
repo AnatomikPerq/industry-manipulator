@@ -55,6 +55,11 @@ def run_extraction_stage(cfg: dict, doc_types: dict = None,
     """
     paths = cfg["paths"]
 
+    # Пометки типа читаем ДО нарезки: файл, помеченный пользователем как
+    # конкретный документ (напр. большая принципиальная схема на ≥80 листов),
+    # не должен быть проглочен авто-опознанием альбома по числу листов.
+    overrides = doc_types or load_type_overrides(cfg)
+
     # Альбомы целиком режутся на отдельные документы ДО извлечения: базовый
     # парсер рассчитан на документ одного вида, а у листа внутри альбома нет
     # имени файла, по которому пайплайн определяет тип. Части выкладываются в
@@ -64,14 +69,13 @@ def run_extraction_stage(cfg: dict, doc_types: dict = None,
             full_projects_dir=resolve_path(paths["full_projects_dir"]),
             base_files_dir=resolve_path(paths["base_files_dir"]),
             scripts_dir=resolve_path(paths["scripts_dir"]),
+            explicit_types=overrides,
         )
         for rep in reports:
             logger.info("Полный проект %s: %d листов -> %d документов "
                         "(%d частей не анализируется)",
                         rep["source_file"], rep["total_pages"],
                         len(rep["parts_written"]), len(rep["parts_skipped"]))
-
-    overrides = doc_types or load_type_overrides(cfg)
     return run_extraction(
         base_files_dir=resolve_path(paths["base_files_dir"]),
         scripts_dir=resolve_path(paths["scripts_dir"]),

@@ -45,7 +45,9 @@ import time
 from pathlib import Path
 
 import known_filter
+import llm_stats
 import llm_transcript
+import script_loader
 from ingest import ExtractionError
 from llm_check import check_server_alive, run_checks
 from oi_agent import run_analysis_agent
@@ -194,6 +196,22 @@ def _init_llm_transcript(cfg: dict, out_dir: Path, visual: bool, skip_agents: bo
     if visual:
         lines.append(f"Зрение: {resolve_vision_cfg(cfg).get('model')}")
     llm_transcript.raw("\n".join(lines))
+
+
+def _init_llm_stats(cfg: dict) -> None:
+    """Подключает счётчик скорости генерации (токенов/с) к каналу прогресса.
+
+    llm_client после каждого обращения к серверу ИИ зовёт llm_stats.record; тот
+    отдаёт число через эмиттер, который назначаем здесь - progress.emit, тот же
+    stdout-канал @@PROGRESS, что и у хода разбора. Так web_app/queue_worker
+    получает скорость там же, где и прогресс листов, не заводя нового канала.
+    progress.py лежит в base_analysis_scripts (копируется в сессию), поэтому
+    грузим её по пути. Не нашлась - счётчик просто молчит."""
+    scripts_dir = resolve_path(cfg["paths"]["scripts_dir"])
+    prog = script_loader.try_load(scripts_dir, "progress.py")
+    if prog is None:
+        return
+    llm_stats.configure(lambda **fields: prog.emit(kind="llm_stats", **fields))
 
 
 def _remove_path(path: Path, retries: int = 5, delay: float = 0.3) -> None:
@@ -346,6 +364,7 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
     if needs_llm:
         preflight_llm(cfg, agents=not skip_agents, vision=visual)
         _init_llm_transcript(cfg, out_dir, visual=visual, skip_agents=skip_agents)
+        _init_llm_stats(cfg)
 
     if visual:
         # Импорт здесь, а не наверху: visual_stage тянет fitz, а main
