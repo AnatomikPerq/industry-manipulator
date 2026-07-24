@@ -230,3 +230,48 @@ def test_extract_text_returns_none_for_unknown_binary(tmp_path):
     p = tmp_path / "a.bin"
     p.write_bytes(b"\x00\x01")
     assert chat_llm.extract_file_text(p) is None
+
+
+# ---------------------------------------------------------------- раздумья модели
+# ThinkSplitter отделяет видимый ответ от рассуждения по инлайновым тегам
+# <think>…</think>. Тег может прийти РАЗРЕЗАННЫМ между чанками потока - это и есть
+# место, где наивная реализация молча ломается (кусок тега утёк бы в ответ).
+
+def _run_splitter(chunks):
+    from chat_llm import ThinkSplitter
+    s = ThinkSplitter()
+    out = []
+    for c in chunks:
+        out += s.feed(c)
+    out += s.flush()
+    return out
+
+
+def test_think_inline_single_chunk():
+    assert _run_splitter(["<think>размышляю</think>ответ"]) == [
+        ("reasoning", "размышляю"), ("content", "ответ")]
+
+
+def test_think_tag_split_across_chunks():
+    out = _run_splitter(["привет <th", "ink>мысль", " ещё</thi", "nk>итог"])
+    kinds = [(k, t) for k, t in out]
+    # ни один кусок открывающего/закрывающего тега не утёк в текст
+    assert ("content", "привет ") in kinds
+    assert ("reasoning", "мысль") in kinds
+    assert ("content", "итог") in kinds
+    joined = "".join(t for k, t in out if k == "content")
+    assert "<think" not in joined and "think>" not in joined
+
+
+def test_think_absent_is_all_content():
+    assert _run_splitter(["обычный ", "ответ"]) == [
+        ("content", "обычный "), ("content", "ответ")]
+
+
+def test_stray_lt_is_not_a_tag():
+    assert _run_splitter(["a < b"]) == [("content", "a < b")]
+
+
+def test_unterminated_think_flushes_as_reasoning():
+    assert _run_splitter(["<think>всё ещё думаю"]) == [
+        ("reasoning", "всё ещё думаю")]

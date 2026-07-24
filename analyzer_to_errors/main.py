@@ -41,9 +41,11 @@ import argparse
 import json
 import logging
 import sys
+import time
 from pathlib import Path
 
 import known_filter
+import llm_transcript
 from ingest import ExtractionError
 from llm_check import check_server_alive, run_checks
 from oi_agent import run_analysis_agent
@@ -161,6 +163,37 @@ def preflight_llm(cfg: dict, agents: bool = True, vision: bool = False) -> None:
                 f"Проверьте, запущен ли LM Studio, кнопкой «Проверить серверы и модели ИИ». "
                 f"Для анализа без ИИ выберите режим «Без ИИ — только скрипты».")
     logger.info("Серверы ИИ доступны, запускаю агентов")
+
+
+def _init_llm_transcript(cfg: dict, out_dir: Path, visual: bool, skip_agents: bool) -> None:
+    """Заводит транскрипт обмена с сервером ИИ на этот прогон - «полный лог LM
+    Studio», который потом открывает кнопка в сессии (см. llm_transcript.py).
+
+    Файл лежит в output/ сессии; clear_previous_results в начале прогона его уже
+    стёр, поэтому configure начинает с чистого листа. Шапка перечисляет, какими
+    моделями пойдёт прогон - по ней сразу видно, к чему относится транскрипт.
+    """
+    llm_transcript.configure(Path(out_dir) / "lmstudio.log")
+    servers = cfg.get("llm_servers", {})
+    agents_cfg = cfg.get("agents", {})
+    lines = ["=" * 80,
+             "ТРАНСКРИПТ ОБМЕНА С СЕРВЕРОМ ИИ (LM Studio)",
+             f"Начат: {time.strftime('%Y-%m-%d %H:%M:%S')}",
+             "=" * 80,
+             "Здесь - всё, что пайплайн отправлял серверу ИИ и получал в ответ за",
+             "этот прогон: агенты, стадия отчёта, зрение, мерджер. Для агентов",
+             "приводится полная беседа Open Interpreter (стадия исследования).",
+             ""]
+    if not skip_agents:
+        if agents_cfg.get("count", 2) == 1:
+            key = agents_cfg.get("single_agent", "agent_1")
+            lines.append(f"Агент: {key} = {servers.get(key, {}).get('model')}")
+        else:
+            lines.append(f"Агент 1: {servers.get('agent_1', {}).get('model')}")
+            lines.append(f"Агент 2: {servers.get('agent_2', {}).get('model')}")
+    if visual:
+        lines.append(f"Зрение: {resolve_vision_cfg(cfg).get('model')}")
+    llm_transcript.raw("\n".join(lines))
 
 
 def _remove_path(path: Path, retries: int = 5, delay: float = 0.3) -> None:
@@ -312,6 +345,7 @@ def run_pipeline(input_dir: str = None, known_errors_path: str = None,
         llm_gate()
     if needs_llm:
         preflight_llm(cfg, agents=not skip_agents, vision=visual)
+        _init_llm_transcript(cfg, out_dir, visual=visual, skip_agents=skip_agents)
 
     if visual:
         # Импорт здесь, а не наверху: visual_stage тянет fitz, а main

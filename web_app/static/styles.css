@@ -5,14 +5,17 @@
 
 :root {
   --blue:        #1877c9;
-  --blue-dark:   #0f4c81;
+  --blue-dark:   #0f4c81;   /* синий как ТЕКСТ (ссылки, имена) */
+  --blue-hover:  #0f4c81;   /* синий как заливка при наведении на кнопку */
   --blue-soft:   #e8f1fb;
   --blue-line:   #c9dff2;
   --orange:      #f2811d;
   --orange-dark: #d96b0a;
   --orange-soft: #fff1e3;
+  --orange-line: #f4cfa4;
   /* третий документ связки (принципиальная схема) в таблице сверки */
   --green-soft:  #e8f6ec;
+  --green-line:  #c4e6cd;
 
   --ink:    #1a2530;
   --muted:  #64717e;
@@ -26,9 +29,89 @@
   --med:    #9a6700;
   --low:    #3a7d44;
   --info:   #5b6570;
+  --crit-line: #f3c6c2;
+
+  /* Нейтральные поверхности и оттенки, раньше стоявшие ЛИТЕРАЛАМИ по всему
+     файлу. Собраны в переменные ради тёмной темы: одна точка правки на
+     светлое И тёмное значение (см. блок [data-theme="dark"] ниже). Правило
+     проекта про единый источник истины касается и цветов: две копии одного
+     оттенка однажды разъехались бы, как уже случалось с таблицами. */
+  --field:       #ffffff;   /* поля ввода, кнопки, ячейки таблицы, плитки */
+  --field-hover: #f0f3f6;   /* наведение на светлую кнопку */
+  --chip:        #eef2f6;   /* нейтральный чип: бейдж вида, подзаголовок таблицы */
+  --chip-alt:    #eef1f4;   /* второй нейтральный оттенок (инфо-бейджи, статусы) */
+  --chip-line:   #e9edf1;   /* заливка группы «мета» в таблице сверки */
+  --row-hover:   #f7fbff;   /* наведение на строку отчёта */
+  --faint:       #aeb8c2;   /* пустая ячейка, самая слабая линия */
+  --on-accent:   #ffffff;   /* текст на синей/оранжевой заливке — всегда светлый */
+
+  /* Мягкие подложки важностей: бейджи важности, плитки статистики, пилюли. */
+  --crit-soft:   #fdeae8;
+  --high-soft:   #fdeee6;
+  --med-soft:    #fbf3df;
+  --low-soft:    #e9f6ec;
+  --info-soft:   #eef1f4;
 
   --radius: 8px;
   --shadow: 0 1px 3px rgba(16,42,67,.08), 0 1px 2px rgba(16,42,67,.06);
+
+  color-scheme: light;
+}
+
+/* ============================================================
+   ТЁМНАЯ ТЕМА. Атрибут data-theme на <html> ставит theme.js:
+   "light" | "dark" — явный выбор пользователя. Режим «системный»
+   резолвится в конкретное значение уже в JS (и там же слушается смена
+   системной темы), поэтому здесь достаточно ОДНОГО селектора
+   [data-theme="dark"] — без дублирующего @media. Ранний инлайн-скрипт
+   в <head> проставляет атрибут ДО первой отрисовки, чтобы тёмный
+   интерфейс не мигнул светлым на загрузке.
+   ============================================================ */
+:root[data-theme="dark"] {
+  --blue:        #2b7fd0;
+  --blue-dark:   #7ac0f5;   /* синий-текст: светлее фона, читается на тёмном */
+  --blue-hover:  #3a92e0;   /* синий-заливка при наведении: ярче базового */
+  --blue-soft:   #15304a;
+  --blue-line:   #2c526f;
+  --orange:      #f2913a;
+  --orange-dark: #f4ad63;
+  --orange-soft: #3a2615;
+  --orange-line: #5a3d1e;
+  --green-soft:  #16301f;
+  --green-line:  #2f5a3f;
+
+  --ink:    #e6ebf0;
+  --muted:  #98a6b4;
+  --line:   #2b3947;
+  --paper:  #182029;
+  --page:   #10161d;
+  --panel:  #1d2732;
+
+  --crit:   #f2685d;
+  --high:   #f0925a;
+  --med:    #e0b64f;
+  --low:    #63c47e;
+  --info:   #9aa7b3;
+  --crit-line: #5a2f2c;
+
+  --field:       #1f2933;
+  --field-hover: #27333f;
+  --chip:        #263340;
+  --chip-alt:    #232f3b;
+  --chip-line:   #212c37;
+  --row-hover:   #1d2934;
+  --faint:       #5d6b7a;
+  --on-accent:   #ffffff;
+
+  --crit-soft:   #3a1f1e;
+  --high-soft:   #37271c;
+  --med-soft:    #332c19;
+  --low-soft:    #17301f;
+  --info-soft:   #232f3b;
+
+  --shadow: 0 1px 3px rgba(0,0,0,.45), 0 1px 2px rgba(0,0,0,.35);
+
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -67,7 +150,7 @@ header img.logo { height: 64px; width: auto; display: block; }
   margin-left: auto;
   background: var(--orange-soft);
   color: var(--orange-dark);
-  border: 1px solid #f4cfa4;
+  border: 1px solid var(--orange-line);
   border-radius: 999px;
   padding: 5px 13px;
   font-size: 12.5px;
@@ -152,11 +235,11 @@ main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
   border: 1px solid var(--blue-line); border-radius: 10px; padding: 1px 8px;
 }
 .file-item .fi-bundle-none {
-  color: var(--muted); background: #eef2f6; border-color: var(--line);
+  color: var(--muted); background: var(--chip); border-color: var(--line);
   font-weight: 500;
 }
 .file-item select {
-  border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; background: #fff;
+  border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; background: var(--field);
   color: var(--ink); flex: none; min-height: 32px;
 }
 .file-item select.unset { border-color: var(--orange); background: var(--orange-soft); }
@@ -171,14 +254,14 @@ main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
 
 /* ---------- Кнопки ---------- */
 .btn {
-  border: 1px solid var(--line); background: #fff; color: var(--ink);
+  border: 1px solid var(--line); background: var(--field); color: var(--ink);
   border-radius: 6px; padding: 8px 14px; cursor: pointer; font-size: 13px; font-weight: 550;
   transition: background .12s, border-color .12s;
 }
-.btn:hover { background: #f0f3f6; }
+.btn:hover { background: var(--field-hover); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn-primary { background: var(--blue); border-color: var(--blue); color: #fff; }
-.btn-primary:hover:not(:disabled) { background: var(--blue-dark); }
+.btn-primary { background: var(--blue); border-color: var(--blue); color: var(--on-accent); }
+.btn-primary:hover:not(:disabled) { background: var(--blue-hover); }
 .btn-ghost { background: transparent; }
 
 /* Кнопка с выпадающим меню (запуск анализа) */
@@ -187,18 +270,18 @@ main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
 .split .btn-primary { border-top-right-radius: 0; border-bottom-right-radius: 0; flex: 1; padding: 11px 16px; font-size: 14px; }
 .split .split-toggle {
   border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(255,255,255,.35);
-  background: var(--blue); border-color: var(--blue); color: #fff; padding: 11px 12px;
+  background: var(--blue); border-color: var(--blue); color: var(--on-accent); padding: 11px 12px;
 }
-.split .split-toggle:hover:not(:disabled) { background: var(--blue-dark); }
+.split .split-toggle:hover:not(:disabled) { background: var(--blue-hover); }
 .run-menu {
   position: absolute; top: calc(100% + 4px); right: 0; z-index: 20;
-  background: #fff; border: 1px solid var(--line); border-radius: 7px; box-shadow: var(--shadow);
+  background: var(--field); border: 1px solid var(--line); border-radius: 7px; box-shadow: var(--shadow);
   min-width: 320px; overflow: hidden; display: none;
 }
 .run-menu.open { display: block; }
 .run-menu button {
-  display: block; width: 100%; text-align: left; border: 0; background: #fff; cursor: pointer;
-  padding: 11px 14px; font-size: 13px;
+  display: block; width: 100%; text-align: left; border: 0; background: var(--field); cursor: pointer;
+  padding: 11px 14px; font-size: 13px; color: var(--ink);
 }
 .run-menu button:hover { background: var(--blue-soft); }
 .run-menu button b { display: block; font-weight: 650; margin-bottom: 2px; }
@@ -224,7 +307,7 @@ main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
 }
 .llm-body select {
   display: block; width: 100%; margin-top: 4px; padding: 7px 8px;
-  border: 1px solid var(--line); border-radius: 6px; background: #fff;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--field);
   color: var(--ink); font-size: 13px; font-family: inherit;
 }
 .llm-body select:disabled { background: var(--page); color: var(--muted); }
@@ -242,9 +325,9 @@ main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
 .status-bar.hidden { display: none; }
 .btn-cancel {
   margin-left: auto; flex: none;
-  border-color: var(--crit); color: var(--crit); background: #fff;
+  border-color: var(--crit); color: var(--crit); background: var(--field);
 }
-.btn-cancel:hover:not(:disabled) { background: #fdecec; }
+.btn-cancel:hover:not(:disabled) { background: var(--crit-soft); }
 .spinner {
   width: 15px; height: 15px; border-radius: 50%; flex: none;
   border: 2px solid var(--blue-line); border-top-color: var(--blue);
@@ -274,15 +357,15 @@ main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
 .llm-server .srv-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 8px; }
 .llm-server .srv-head .mono { color: var(--muted); }
 .pill { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; padding: 2px 9px; font-size: 11.5px; font-weight: 600; }
-.pill-up   { background: #e7f6ea; color: var(--low); border: 1px solid #bfe4c7; }
-.pill-down { background: #fdeceb; color: var(--crit); border: 1px solid #f3c9c5; }
+.pill-up   { background: var(--low-soft); color: var(--low); border: 1px solid var(--green-line); }
+.pill-down { background: var(--crit-soft); color: var(--crit); border: 1px solid var(--crit-line); }
 .model-row { display: flex; align-items: center; gap: 9px; padding: 6px 0; border-top: 1px dashed var(--line); font-size: 12.5px; }
 .model-row:first-of-type { border-top: 0; }
 .model-row .m-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-row .m-name b { color: var(--orange-dark); }
 .tag { border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 600; flex: none; }
-.tag-loaded  { background: #e7f6ea; color: var(--low); }
-.tag-idle    { background: #eef1f4; color: var(--muted); }
+.tag-loaded  { background: var(--low-soft); color: var(--low); }
+.tag-idle    { background: var(--chip-alt); color: var(--muted); }
 .tag-wanted  { background: var(--blue-soft); color: var(--blue-dark); border: 1px solid var(--blue-line); }
 
 /* ---------- Отчёт (таблица) ---------- */
@@ -294,7 +377,7 @@ main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
 }
 .report-stats { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 .stat {
-  border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 7px 12px; min-width: 92px;
+  border: 1px solid var(--line); background: var(--field); border-radius: 6px; padding: 7px 12px; min-width: 92px;
 }
 .stat .s-num { font-size: 19px; font-weight: 700; }
 .stat .s-lbl { color: var(--muted); font-size: 11.5px; }
@@ -304,21 +387,21 @@ main { max-width: 1500px; margin: 0 auto; padding: 20px 24px 48px; }
 .stat.sev-low .s-num { color: var(--low); }
 .stat.sev-info .s-num { color: var(--info); }
 
-.table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.table-wrap { overflow: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--field); }
 table.report { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 1400px; font-size: 12.5px; }
 table.report th, table.report td {
   border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
   padding: 7px 9px; vertical-align: top; text-align: left;
 }
 table.report th:last-child, table.report td:last-child { border-right: 0; }
-table.report thead tr:first-child th { text-align: center; font-size: 12px; padding: 8px; border-bottom: 1px solid #aeb8c2; }
-table.report thead tr:nth-child(2) th { background: #eef2f6; font-size: 11.5px; white-space: nowrap; position: sticky; top: 0; }
-.grp-meta   { background: #e9edf1; }
+table.report thead tr:first-child th { text-align: center; font-size: 12px; padding: 8px; border-bottom: 1px solid var(--faint); }
+table.report thead tr:nth-child(2) th { background: var(--chip); font-size: 11.5px; white-space: nowrap; position: sticky; top: 0; }
+.grp-meta   { background: var(--chip-line); }
 .grp-source { background: var(--blue-soft); }
 .grp-install{ background: var(--orange-soft); }
 /* третья группа колонок - принципиальная схема в таблице сверки связки */
 .grp-scheme { background: var(--green-soft); }
-.grp-out    { background: #eef2f6; }
+.grp-out    { background: var(--chip); }
 .sub-source { background: var(--blue-soft) !important; }
 .sub-install{ background: var(--orange-soft) !important; }
 .sub-scheme { background: var(--green-soft) !important; }
@@ -331,28 +414,28 @@ table.report thead tr:nth-child(2) th { background: #eef2f6; font-size: 11.5px; 
 }
 .report-group:first-child { margin-top: 0; }
 .report-group-n {
-  background: #eef2f6; border: 1px solid var(--line); border-radius: 10px;
+  background: var(--chip); border: 1px solid var(--line); border-radius: 10px;
   padding: 0 8px; font-size: 11.5px; font-weight: 600; color: var(--info);
 }
 
-table.report tbody tr:hover td { background: #f7fbff; }
+table.report tbody tr:hover td { background: var(--row-hover); }
 table.report td.mono { white-space: nowrap; }
-.empty-cell { color: #aeb8c2; }
+.empty-cell { color: var(--faint); }
 .kind-badge, .sev-badge { display: inline-block; border-radius: 4px; padding: 1px 7px; font-size: 11px; font-weight: 650; white-space: nowrap; }
-.sev-critical { background: #fdeae8; color: var(--crit); }
-.sev-high { background: #fdeee6; color: var(--high); }
-.sev-medium { background: #fbf3df; color: var(--med); }
-.sev-low { background: #e9f6ec; color: var(--low); }
-.sev-info { background: #eef1f4; color: var(--info); }
-.kind-badge { background: #eef2f6; color: var(--ink); border: 1px solid var(--line); }
+.sev-critical { background: var(--crit-soft); color: var(--crit); }
+.sev-high { background: var(--high-soft); color: var(--high); }
+.sev-medium { background: var(--med-soft); color: var(--med); }
+.sev-low { background: var(--low-soft); color: var(--low); }
+.sev-info { background: var(--info-soft); color: var(--info); }
+.kind-badge { background: var(--chip); color: var(--ink); border: 1px solid var(--line); }
 tbody tr[data-sev="critical"] td:first-child { border-left: 4px solid var(--crit); }
 tbody tr[data-sev="high"] td:first-child { border-left: 4px solid var(--high); }
 tbody tr[data-sev="medium"] td:first-child { border-left: 4px solid var(--med); }
 tbody tr[data-sev="low"] td:first-child { border-left: 4px solid var(--low); }
 tbody tr[data-sev="info"] td:first-child { border-left: 4px solid var(--info); }
 td.finding { min-width: 240px; white-space: normal; }
-td.action  { min-width: 220px; white-space: normal; color: #34404b; }
-.no-issues { padding: 22px; text-align: center; color: var(--low); font-size: 15px; background: #f0faf3; border-radius: 6px; }
+td.action  { min-width: 220px; white-space: normal; color: var(--ink); }
+.no-issues { padding: 22px; text-align: center; color: var(--low); font-size: 15px; background: var(--low-soft); border-radius: 6px; }
 
 .hint-text { color: var(--muted); font-size: 12px; margin-top: 8px; }
 
@@ -391,13 +474,13 @@ td.action  { min-width: 220px; white-space: normal; color: #34404b; }
   display: inline-block; padding: 2px 8px; border-radius: 10px;
   font-size: 11.5px; font-weight: 600; border: 1px solid transparent;
 }
-.st-draft       { background: #eef1f4; color: var(--info);   border-color: var(--line); }
-.st-queued      { background: var(--orange-soft); color: var(--orange-dark); border-color: #f6d4b0; }
+.st-draft       { background: var(--chip-alt); color: var(--info);   border-color: var(--line); }
+.st-queued      { background: var(--orange-soft); color: var(--orange-dark); border-color: var(--orange-line); }
 .st-running     { background: var(--blue-soft);   color: var(--blue-dark);   border-color: var(--blue-line); }
-.st-done        { background: #f0faf3; color: var(--low);  border-color: #c4e6cd; }
-.st-error       { background: #fdecec; color: var(--crit); border-color: #f3c6c2; }
-.st-cancelled   { background: #eef1f4; color: var(--info); border-color: var(--line); }
-.st-interrupted { background: #fdecec; color: var(--crit); border-color: #f3c6c2; }
+.st-done        { background: var(--low-soft); color: var(--low);  border-color: var(--green-line); }
+.st-error       { background: var(--crit-soft); color: var(--crit); border-color: var(--crit-line); }
+.st-cancelled   { background: var(--chip-alt); color: var(--info); border-color: var(--line); }
+.st-interrupted { background: var(--crit-soft); color: var(--crit); border-color: var(--crit-line); }
 
 /* ---------- Хлебные крошки экрана сессии ---------- */
 .crumbs { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
@@ -412,7 +495,7 @@ td.action  { min-width: 220px; white-space: normal; color: #34404b; }
   flex: none; border: 1px solid var(--line); background: var(--paper); color: var(--muted);
   border-radius: 5px; width: 26px; height: 26px; line-height: 1; cursor: pointer; font-size: 12px;
 }
-.file-item .fi-del:hover:not(:disabled) { background: #fdecec; color: var(--crit); border-color: #f3c6c2; }
+.file-item .fi-del:hover:not(:disabled) { background: var(--crit-soft); color: var(--crit); border-color: var(--crit-line); }
 .file-item .fi-del:disabled { opacity: .4; cursor: not-allowed; }
 
 /* форма создания сессии (раскрывается кнопкой «Новая сессия») */
@@ -434,7 +517,7 @@ a.fi-name:hover { color: var(--blue-dark); border-bottom-color: var(--blue); }
 /* документ, вырезанный из загруженного альбома, а не загруженный руками */
 .file-item .fi-gen {
   flex: none; font-size: 11px; font-weight: 600; color: var(--muted);
-  background: #eef2f6; border: 1px solid var(--line); border-radius: 10px; padding: 1px 8px;
+  background: var(--chip); border: 1px solid var(--line); border-radius: 10px; padding: 1px 8px;
 }
 
 /* ============================================================
@@ -475,7 +558,7 @@ a.fi-name:hover { color: var(--blue-dark); border-bottom-color: var(--blue); }
    из листа, значит потерять контекст, ради которого его показывают. */
 .frag-item img {
   display: block; max-width: 100%; height: auto;
-  border: 1px solid var(--line); border-radius: 4px; background: #fff;
+  border: 1px solid var(--line); border-radius: 4px; background: #fff;   /* растр чертежа всегда на белом */
 }
 .frag-item .frag-fail {
   color: var(--muted); font-size: 12.5px; line-height: 1.5;
@@ -487,7 +570,7 @@ a.fi-name:hover { color: var(--blue-dark); border-bottom-color: var(--blue); }
 .frag-item .frag-warn {
   display: inline-block; margin-left: 8px; padding: 1px 8px;
   font-size: 11.5px; font-weight: 600; color: var(--orange-dark);
-  background: var(--orange-soft); border: 1px solid #f6d4b0; border-radius: 10px;
+  background: var(--orange-soft); border: 1px solid var(--orange-line); border-radius: 10px;
 }
 
 /* Документ, который скрипты разбирают прямо сейчас. Заливка + полоса слева:
@@ -573,7 +656,7 @@ body.unauthed > header, body.unauthed > main { display: none; }
 .auth-label { font-size: 12px; font-weight: 600; color: var(--muted); }
 .auth-input {
   width: 100%; padding: 11px 13px; font-size: 15px;
-  border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink);
+  border: 1px solid var(--line); border-radius: 8px; background: var(--field); color: var(--ink);
 }
 .auth-input:focus { outline: none; border-color: var(--blue); box-shadow: 0 0 0 3px var(--blue-soft); }
 .auth-pass { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
@@ -584,7 +667,7 @@ body.unauthed > header, body.unauthed > main { display: none; }
   border: 1px solid var(--blue); border-radius: 8px; background: var(--blue); color: #fff;
   cursor: pointer; transition: background .15s;
 }
-.auth-btn:hover:not(:disabled) { background: var(--blue-dark); }
+.auth-btn:hover:not(:disabled) { background: var(--blue-hover); }
 .auth-btn:disabled { opacity: .6; cursor: default; }
 .auth-link {
   margin-top: 4px; background: none; border: none; color: var(--blue-dark);
@@ -651,7 +734,7 @@ body.unauthed > header, body.unauthed > main { display: none; }
   font-size: 11px; font-weight: 600; color: var(--muted);
   background: var(--page); border: 1px solid var(--line); border-radius: 999px; padding: 1px 9px;
 }
-.u-badge.u-admin { color: var(--orange-dark); background: var(--orange-soft); border-color: #f4cfa4; }
+.u-badge.u-admin { color: var(--orange-dark); background: var(--orange-soft); border-color: var(--orange-line); }
 .u-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .u-actions .btn { padding: 5px 10px; font-size: 12px; }
 .users-add {
@@ -662,7 +745,7 @@ body.unauthed > header, body.unauthed > main { display: none; }
 .users-add-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .users-add-row input[type="text"] {
   padding: 8px 11px; font-size: 13px; border: 1px solid var(--line);
-  border-radius: 7px; background: #fff; color: var(--ink); min-width: 150px; flex: 1;
+  border-radius: 7px; background: var(--field); color: var(--ink); min-width: 150px; flex: 1;
 }
 .users-add-row input:focus { outline: none; border-color: var(--blue); }
 .nu-admin { display: inline-flex; align-items: center; gap: 5px; font-size: 12.5px; color: var(--ink); white-space: nowrap; }
@@ -685,7 +768,7 @@ body.unauthed > header, body.unauthed > main { display: none; }
 }
 .chat-model-label select {
   padding: 8px 11px; font-size: 13px; border: 1px solid var(--line);
-  border-radius: 7px; background: #fff; color: var(--ink); min-width: 260px;
+  border-radius: 7px; background: var(--field); color: var(--ink); min-width: 260px;
 }
 .chat-model-label select:focus { outline: none; border-color: var(--blue); }
 .chat-model-note { color: var(--med); font-size: 12px; flex: 1; min-width: 200px; align-self: center; }
@@ -711,7 +794,7 @@ body.unauthed > header, body.unauthed > main { display: none; }
   background: var(--blue); color: #fff; border-bottom-right-radius: 4px;
 }
 .chat-msg.bot .chat-bubble {
-  background: #fff; color: var(--ink); border: 1px solid var(--line);
+  background: var(--paper); color: var(--ink); border: 1px solid var(--line);
   border-bottom-left-radius: 4px;
 }
 .chat-text { white-space: pre-wrap; word-break: break-word; }
@@ -725,7 +808,7 @@ body.unauthed > header, body.unauthed > main { display: none; }
 
 .chat-img {
   display: block; max-width: 260px; max-height: 260px; border-radius: 8px;
-  margin-bottom: 6px; border: 1px solid var(--line); background: #fff;
+  margin-bottom: 6px; border: 1px solid var(--line); background: var(--paper);
 }
 .chat-file {
   display: inline-block; margin: 0 6px 6px 0; padding: 5px 9px;
@@ -758,10 +841,134 @@ body.unauthed > header, body.unauthed > main { display: none; }
 .chat-inputbar textarea {
   flex: 1; resize: none; min-height: 42px; max-height: 200px;
   padding: 10px 12px; font-size: 14px; line-height: 1.45;
-  border: 1px solid var(--line); border-radius: 9px; background: #fff; color: var(--ink);
+  border: 1px solid var(--line); border-radius: 9px; background: var(--field); color: var(--ink);
 }
 .chat-inputbar textarea:focus { outline: none; border-color: var(--blue); }
 .chat-inputbar .btn-primary { flex: none; height: 42px; padding: 0 20px; }
 .chat-inputbar .btn-primary.btn-cancel {
   background: var(--crit); border-color: var(--crit); color: #fff;
 }
+
+/* ---------- Чат: раздумья модели и скорость ---------- */
+/* Счётчик токенов/с рядом с выбором модели */
+.chat-tps {
+  align-self: center; flex: none; padding: 3px 10px; border-radius: 20px;
+  background: var(--blue-soft); color: var(--blue-dark); border: 1px solid var(--blue-line);
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+/* Сворачиваемый блок рассуждения над ответом «думающей» модели */
+.chat-think {
+  margin-bottom: 8px; border: 1px dashed var(--line); border-radius: 8px;
+  background: var(--panel);
+}
+.chat-think > summary {
+  cursor: pointer; padding: 6px 10px; font-size: 12px; font-weight: 600;
+  color: var(--muted); list-style: none; user-select: none;
+}
+.chat-think > summary::-webkit-details-marker { display: none; }
+.chat-think > summary::before { content: "▸ "; color: var(--muted); }
+.chat-think[open] > summary::before { content: "▾ "; }
+.chat-think-body {
+  padding: 2px 12px 10px; font-size: 12.5px; line-height: 1.5; color: var(--muted);
+  white-space: pre-wrap; word-break: break-word;
+  max-height: 260px; overflow-y: auto;
+}
+
+/* ---------- Настройки ИИ (модалка администратора) ---------- */
+/* Модалка использует ту же оболочку, что «Пользователи» (.users-modal) */
+.llm-admin-window { max-width: 820px; width: 94%; }
+
+.llm-admin-tabs { display: flex; gap: 4px; padding: 0 18px; border-bottom: 1px solid var(--line); }
+.llm-tab {
+  border: 0; background: transparent; cursor: pointer; padding: 10px 14px;
+  font-size: 13px; font-weight: 600; color: var(--muted);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.llm-tab:hover { color: var(--ink); }
+.llm-tab.active { color: var(--blue-dark); border-bottom-color: var(--orange); }
+
+.llm-admin-body { padding: 14px 18px; overflow: auto; max-height: 70vh; }
+.llm-admin-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.llm-admin-msg { font-size: 12.5px; color: var(--med); }
+.llm-admin-msg.ok { color: var(--low); }
+.llm-admin-msg.err { color: var(--crit); }
+
+/* параметры загрузки модели */
+.llm-load-params { margin-bottom: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.llm-load-params > summary {
+  cursor: pointer; padding: 9px 12px; font-size: 13px; font-weight: 600; color: var(--blue-dark);
+  list-style: none;
+}
+.llm-load-params > summary::-webkit-details-marker { display: none; }
+.llm-load-params > summary::before { content: "▸ "; }
+.llm-load-params[open] > summary::before { content: "▾ "; }
+.llm-load-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px; padding: 4px 12px 10px;
+}
+.llm-load-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.llm-load-grid label.llm-check { flex-direction: row; align-items: center; gap: 7px; }
+.llm-load-grid input[type="number"] {
+  padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--field); color: var(--ink);
+}
+.llm-load-params .llm-hint { padding: 0 12px 10px; }
+
+/* список моделей сервера */
+.llm-models-list { display: flex; flex-direction: column; }
+.llm-model-row {
+  display: flex; align-items: center; gap: 10px; padding: 9px 4px;
+  border-top: 1px solid var(--line);
+}
+.llm-model-row:first-child { border-top: 0; }
+.llm-model-row.is-loaded { background: var(--green-soft); border-radius: 6px; }
+.llm-model-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.llm-model-name { font-weight: 600; font-size: 13px; color: var(--ink); }
+.llm-model-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.llm-model-actions .btn { padding: 6px 12px; font-size: 12.5px; }
+.tag-vis  { background: var(--blue-soft); color: var(--blue-dark); }
+.tag-rsn  { background: var(--orange-soft); color: var(--orange-dark); }
+.tag-type { background: var(--chip-alt); color: var(--muted); text-transform: uppercase; }
+
+/* форма глобального конфига */
+.llm-config-form { display: flex; flex-direction: column; gap: 12px; }
+.cfg-group { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 12px; margin: 0; }
+.cfg-group > legend { font-size: 12.5px; font-weight: 700; color: var(--blue-dark); padding: 0 6px; }
+.cfg-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.cfg-field { display: flex; flex-direction: column; gap: 4px; }
+.cfg-label { font-size: 12px; color: var(--muted); }
+.cfg-local { color: var(--orange-dark); font-size: 11px; font-weight: 600; }
+.cfg-field input, .cfg-field select {
+  padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--field); color: var(--ink);
+  font-size: 13px;
+}
+.cfg-field input:focus, .cfg-field select:focus { outline: none; border-color: var(--blue); }
+.llm-config-actions { display: flex; align-items: center; gap: 14px; margin-top: 14px; flex-wrap: wrap; }
+
+/* второй head-action (кнопка «Настройки ИИ») не должен уезжать через весь ряд:
+   первый .head-action уже несёт margin-left:auto, второму хватает обычного отступа */
+.card > .card-head .head-action + .head-action { margin-left: 8px; }
+
+/* ============================================================
+   Переключатель темы: светлая / системная / тёмная (theme.js).
+   Живёт в шапке приложения и в углу экрана входа; сегментированная
+   пилюля из трёх иконок, активная подсвечена синим.
+   ============================================================ */
+.theme-seg {
+  display: inline-flex; align-items: center; gap: 2px;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 999px; padding: 3px;
+}
+.theme-opt {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 26px; padding: 0; border: 0; border-radius: 999px;
+  background: transparent; color: var(--muted); cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.theme-opt:hover { color: var(--ink); background: var(--field-hover); }
+.theme-opt.is-active { background: var(--blue); color: var(--on-accent); }
+.theme-opt svg { display: block; width: 16px; height: 16px; }
+
+/* На экране входа шапки нет — переключатель прижат к верхнему углу поверх
+   экрана (z-index выше самого экрана входа, 300). */
+.theme-switch-auth { position: fixed; top: 18px; right: 18px; z-index: 310; }
+body:not(.unauthed) .theme-switch-auth { display: none; }

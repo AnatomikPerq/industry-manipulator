@@ -5,12 +5,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ИНДУСТРИЯ МАНИПУЛЯТОР — Анализатор проектной документации</title>
   <link rel="stylesheet" href="/static/styles.css">
+  <script>
+    // Раннее применение темы — ДО первой отрисовки, чтобы тёмный интерфейс не
+    // мигнул светлым на загрузке. Полная логика (переключатель, слежение за
+    // системной темой) — в theme.js; здесь только выставление атрибута.
+    (function () {
+      try {
+        var pref = localStorage.getItem("im-theme") || "system";
+        var dark = pref === "dark" || (pref === "system" && window.matchMedia
+          && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
+      } catch (e) { /* приватный режим без localStorage — останется светлая */ }
+    })();
+  </script>
 </head>
 <body class="unauthed">
   <!-- ============ ЭКРАН ВХОДА ============ -->
   <!-- Показывается, пока в body класс unauthed; app.js снимает его после входа.
        Класс стоит уже в разметке, чтобы приложение не мелькнуло до проверки. -->
   <div id="view-auth" class="auth-screen">
+    <div class="theme-switch theme-switch-auth" id="theme-switch-auth"></div>
     <div class="auth-card">
       <img class="auth-logo" src="/static/logo.png" alt="Логотип ИНДУСТРИЯ МАНИПУЛЯТОР">
       <div class="auth-brand">ИНДУСТРИЯ МАНИПУЛЯТОР</div>
@@ -50,8 +64,9 @@
       <div class="sub">Проверка EPLAN-схем и таблиц подключений на ошибки</div>
     </div>
     <div class="header-right">
+      <div class="theme-switch" id="theme-switch-header"></div>
       <div class="user-area" id="user-area"></div>
-      <span class="version-badge" id="version-badge">V2.1 beta</span>
+      <span class="version-badge" id="version-badge">V2.2 beta</span>
     </div>
   </header>
 
@@ -61,6 +76,8 @@
       <section class="card">
         <div class="card-head">
           <span class="accent"></span><h2>Сессии анализа</h2>
+          <button class="btn head-action hidden" id="btn-llm-admin"
+                  title="Управление моделями LM Studio и глобальными настройками нейросетей">⚙ Настройки ИИ</button>
           <button class="btn head-action" id="btn-chat">💬 Чат с ИИ</button>
           <button class="btn-primary" id="btn-new-session">Новая сессия</button>
         </div>
@@ -151,9 +168,11 @@
                   <select id="llm-vision"></select>
                 </label>
 
-                <div class="llm-hint">Пустой выбор — как в общем config.yaml.
-                  Настройка действует только на эту сессию и записывается в её
-                  config.yaml, поэтому потом всегда видно, чем считался отчёт.</div>
+                <div class="llm-hint">Выбор только из моделей, ЗАГРУЖЕННЫХ в память
+                  сервера ИИ. Пустой выбор — модель по умолчанию. Настройка
+                  действует только на эту сессию, поэтому потом всегда видно, чем
+                  считался отчёт. Полная настройка нейросетей и загрузка моделей —
+                  у администратора.</div>
               </div>
             </details>
 
@@ -217,6 +236,8 @@
         <div class="card-body">
           <div class="debug-toolbar">
             <button class="btn" id="btn-check-llm">Проверить серверы и модели ИИ</button>
+            <button class="btn" id="btn-llm-log" disabled
+                    title="Полный транскрипт обмена с сервером ИИ за последний прогон — откроется в новой вкладке">Лог LM Studio</button>
             <button class="btn" id="btn-show-report">Вывести отчёт сессии</button>
             <button class="btn btn-ghost" id="btn-clear-console">Очистить консоль</button>
           </div>
@@ -263,6 +284,8 @@
             <label class="chat-model-label">Модель
               <select id="chat-model"></select>
             </label>
+            <span class="chat-tps hidden" id="chat-tps"
+                  title="Скорость генерации ответа моделью"></span>
             <div class="chat-model-note" id="chat-model-note"></div>
           </div>
 
@@ -287,6 +310,74 @@
             «Новый чат» закрывает текущий (он уходит в архив на диске).</div>
         </div>
       </section>
+    </div>
+
+    <!-- НАСТРОЙКИ ИИ: модели LM Studio + глобальный конфиг (только администратору) -->
+    <div class="users-modal" id="llm-admin-modal">
+      <div class="users-window llm-admin-window">
+        <div class="users-bar">
+          <div>
+            <div class="users-title">Настройки ИИ</div>
+            <div class="users-note">Управление сервером LM Studio и глобальным
+              конфигом нейросетей. Действует на всю программу; правки конфига
+              сохраняются в файл установки и вступают в силу со следующего прогона.</div>
+          </div>
+          <button class="btn btn-ghost" id="llm-admin-close">Закрыть</button>
+        </div>
+
+        <div class="llm-admin-tabs">
+          <button class="llm-tab active" data-tab="models">Модели LM Studio</button>
+          <button class="llm-tab" data-tab="config">Конфигурация нейросетей</button>
+        </div>
+
+        <div class="llm-admin-body">
+          <!-- ВКЛАДКА: модели LM Studio -->
+          <div class="llm-tabpane" id="llm-tab-models">
+            <div class="llm-admin-row">
+              <button class="btn" id="llm-models-refresh">Обновить список</button>
+              <span class="llm-admin-msg" id="llm-models-msg"></span>
+            </div>
+
+            <details class="llm-load-params" id="llm-load-params">
+              <summary>Параметры загрузки модели</summary>
+              <div class="llm-load-grid">
+                <label>Контекст (context_length)
+                  <input type="number" id="lp-context" min="1" placeholder="напр. 8192">
+                </label>
+                <label>TTL, сек (авто-выгрузка)
+                  <input type="number" id="lp-ttl" min="1" placeholder="держать всегда">
+                </label>
+                <label>eval_batch_size
+                  <input type="number" id="lp-batch" min="1" placeholder="по умолчанию">
+                </label>
+                <label>num_experts (MoE)
+                  <input type="number" id="lp-experts" min="1" placeholder="по умолчанию">
+                </label>
+                <label class="llm-check"><input type="checkbox" id="lp-flash"> Flash Attention</label>
+                <label class="llm-check"><input type="checkbox" id="lp-kv"> KV-кэш на GPU</label>
+              </div>
+              <div class="llm-hint">Пустые поля — как решит сервер. Параметры
+                применяются к следующей загрузке. GPU-offload через API LM Studio
+                не задаётся — он берётся из настроек модели в самом LM Studio.</div>
+            </details>
+
+            <div class="llm-models-list" id="llm-admin-models">
+              <div class="hint-text">Загрузка списка…</div>
+            </div>
+          </div>
+
+          <!-- ВКЛАДКА: конфигурация нейросетей -->
+          <div class="llm-tabpane hidden" id="llm-tab-config">
+            <div class="llm-admin-msg" id="llm-config-msg"></div>
+            <form id="llm-config-form" class="llm-config-form"></form>
+            <div class="llm-config-actions">
+              <button class="btn-primary" id="llm-config-save">Сохранить конфиг</button>
+              <span class="llm-hint">Изменённые здесь значения переопределяют
+                значения по умолчанию и вступают в силу со следующего запуска анализа.</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ (только администратору) -->
@@ -332,7 +423,7 @@
 
     <footer class="app-footer">
       <b>ИНДУСТРИЯ МАНИПУЛЯТОР</b> · Анализатор проектной документации ·
-      <span id="footer-version">V2.1 beta</span>
+      <span id="footer-version">V2.2 beta</span>
     </footer>
   </main>
 

@@ -18,7 +18,24 @@ import time
 
 from openai import APIConnectionError, APIStatusError, OpenAI
 
+import llm_transcript
+
 logger = logging.getLogger(__name__)
+
+
+def _usage_meta(resp) -> str:
+    """Короткая пометка о токенах для транскрипта, если сервер их вернул."""
+    usage = getattr(resp, "usage", None)
+    if not usage:
+        return None
+    ct = getattr(usage, "completion_tokens", None)
+    pt = getattr(usage, "prompt_tokens", None)
+    bits = []
+    if pt is not None:
+        bits.append(f"промпт {pt}")
+    if ct is not None:
+        bits.append(f"ответ {ct} токенов")
+    return ", ".join(bits) or None
 
 # Коды, при которых запрос имеет смысл повторить. 503 LM Studio отдаёт, когда
 # модель ещё грузится или на секунду отвалилась, - на прогоне в сотни тайлов
@@ -84,23 +101,37 @@ def make_client(server_cfg: dict) -> OpenAI:
     )
 
 
-def make_simple_ask_fn(server_cfg: dict):
+def make_simple_ask_fn(server_cfg: dict, label: str = "LLM (chat)"):
     """Возвращает функцию (str) -> str поверх обычного chat.completions,
     с накоплением истории диалога (нужно для цикла авторемонта JSON:
-    модель должна помнить свой предыдущий невалидный ответ)."""
+    модель должна помнить свой предыдущий невалидный ответ).
+
+    label - как назвать эти обращения в транскрипте LM Studio (мерджер, стадия
+    отчёта агента, проверка серверов): в один прогон их несколько разных.
+    """
     client = make_client(server_cfg)
     history = []
 
     def ask(message: str) -> str:
         history.append({"role": "user", "content": message})
-        resp = client.chat.completions.create(
-            model=server_cfg["model"],
-            messages=history,
-            temperature=server_cfg.get("temperature", 0.0),
-            max_tokens=server_cfg.get("max_tokens", 4096),
-        )
+        t0 = time.time()
+        try:
+            resp = client.chat.completions.create(
+                model=server_cfg["model"],
+                messages=history,
+                temperature=server_cfg.get("temperature", 0.0),
+                max_tokens=server_cfg.get("max_tokens", 4096),
+            )
+        except Exception as e:  # noqa: BLE001 - логируем отказ и пробрасываем
+            llm_transcript.record(label, model=server_cfg.get("model"),
+                                  request=message, seconds=time.time() - t0,
+                                  error=f"{type(e).__name__}: {e}")
+            raise
         text = resp.choices[0].message.content or ""
         history.append({"role": "assistant", "content": text})
+        llm_transcript.record(label, model=server_cfg["model"], request=message,
+                              response=text, seconds=time.time() - t0,
+                              meta=_usage_meta(resp))
         return text
 
     return ask
@@ -162,7 +193,7 @@ def _image_part(png: bytes) -> dict:
 VISION_MAX_TOKENS_CEILING = 4096
 
 
-def make_vision_ask_fn(server_cfg: dict, system: str = None):
+def make_vision_ask_fn(server_cfg: dict, system: str = None, label: str = "зрение"):
     """Возвращает функцию (текст, картинки) -> ответ модели.
 
     БЕЗ ИСТОРИИ ПО УМОЛЧАНИЮ, и это принципиально. Единица работы зрения - один
@@ -194,13 +225,22 @@ def make_vision_ask_fn(server_cfg: dict, system: str = None):
         messages += history if keep_history else []
         messages.append({"role": "user", "content": content})
 
-        resp = _with_retries(
-            lambda: client.chat.completions.create(
-                model=server_cfg["model"],
-                messages=messages,
-                temperature=server_cfg.get("temperature", 0.1),
-                max_tokens=max_tokens,
-            ))
+        n_img = len(images or ())
+        req_text = message + (f"\n[+ {n_img} изображени(я/й)]" if n_img else "")
+        t0 = time.time()
+        try:
+            resp = _with_retries(
+                lambda: client.chat.completions.create(
+                    model=server_cfg["model"],
+                    messages=messages,
+                    temperature=server_cfg.get("temperature", 0.1),
+                    max_tokens=max_tokens,
+                ))
+        except Exception as e:  # noqa: BLE001 - логируем отказ и пробрасываем
+            llm_transcript.record(label, model=server_cfg.get("model"),
+                                  request=req_text, seconds=time.time() - t0,
+                                  error=f"{type(e).__name__}: {e}")
+            raise
         choice = resp.choices[0]
         text = choice.message.content or ""
 
@@ -218,13 +258,22 @@ def make_vision_ask_fn(server_cfg: dict, system: str = None):
         if not text.strip():
             reason = choice.finish_reason
             if reason == "length":
-                raise VisionAnswerError(
+                err = VisionAnswerError(
                     f"модель израсходовала весь лимит ответа ({max_tokens} токенов) на "
                     "рассуждение и до ответа не дошла. Так она ведёт себя на густой "
                     "графике; поднимать лимит бесполезно - она растянет рассуждение и "
                     "на него (замерено). Смотрите настройки модели в LM Studio")
-            raise VisionAnswerError(f"модель вернула пустой ответ (finish_reason={reason})")
+            else:
+                err = VisionAnswerError(
+                    f"модель вернула пустой ответ (finish_reason={reason})")
+            llm_transcript.record(label, model=server_cfg.get("model"),
+                                  request=req_text, seconds=time.time() - t0,
+                                  error=str(err))
+            raise err
 
+        llm_transcript.record(label, model=server_cfg["model"], request=req_text,
+                              response=text, seconds=time.time() - t0,
+                              meta=_usage_meta(resp))
         if keep_history:
             history.append({"role": "user", "content": content})
             history.append({"role": "assistant", "content": text})

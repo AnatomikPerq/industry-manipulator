@@ -43,6 +43,11 @@
     GET  /api/config                    - типы документов, версия, адрес сервера ИИ
     GET  /api/check-llm                 - какие модели ИИ загружены/доступны
     GET  /api/models                    - список моделей сервера для выбора в интерфейсе
+    GET  /api/lmstudio/models           - все модели сервера со статусом (админ)
+    POST /api/lmstudio/load             - загрузить модель в память {model, params} (админ)
+    POST /api/lmstudio/unload           - выгрузить модель {instance_id} (админ)
+    GET  /api/admin/config              - глобальный конфиг ИИ (админ)
+    POST /api/admin/config              - сохранить конфиг ИИ в config.local.yaml (админ)
     GET  /api/sessions                  - список сессий + состояние очереди
     POST /api/sessions                  - создать сессию {name}
     GET  /api/sessions/<id>             - метаданные сессии + её файлы
@@ -60,6 +65,7 @@
     GET  /api/sessions/<id>/report.pdf  - тот же отчёт одним PDF
     GET  /api/sessions/<id>/file?path=  - исходный документ (открыть во вкладке)
     GET  /api/sessions/<id>/fragment?…  - PNG с фрагментом чертежа у находки
+    GET  /api/sessions/<id>/lmstudio.log - транскрипт обмена с ИИ за прогон
     GET  /api/chat                      - активный чат пользователя (сообщения + модель)
     GET  /api/chat/file?path=           - файл/картинка, приложенные к сообщению
     POST /api/chat/set-model            - выбрать модель для чата {model}
@@ -74,7 +80,6 @@ import mimetypes
 import os
 import shutil
 import sys
-import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -102,12 +107,16 @@ from llm_check import check_server_alive  # noqa: E402  (быстрая пров
 
 import multipart                          # noqa: E402  (потоковый разбор загрузки)
 import queue_worker                       # noqa: E402  (константы пула - во фронтенд)
+import lmstudio                           # noqa: E402  (управление моделями LM Studio)
+import config_admin                       # noqa: E402  (правка конфига ИИ админом)
 from queue_worker import AnalysisQueue    # noqa: E402
 from chats import ChatError, ChatStore    # noqa: E402  (обычный чат с ИИ)
+from config_admin import ConfigError      # noqa: E402
+from lmstudio import LMStudioError        # noqa: E402
 from sessions import FULL_PROJECT_TYPE, SessionError, SessionStore  # noqa: E402
 from users import UserError, UserStore, canon  # noqa: E402
 
-PROJECT_VERSION = "V2.1 beta"
+PROJECT_VERSION = "V2.2 beta"
 
 # Имя cookie с токеном входа. Токен кладём именно в cookie, а не в localStorage:
 # исходные документы, PDF-отчёт и фрагменты чертежа открываются НАТИВНО браузером
@@ -212,51 +221,18 @@ def _clear_cookie_header() -> tuple:
 
 
 # =====================================================================
-# Проверка серверов ИИ (быстрая, через нативный API LM Studio)
+# Проверка серверов ИИ и управление моделями (нативный API LM Studio)
 # =====================================================================
+#
+# Разбор ответа /api/v1/models и load/unload живут в отдельном модуле lmstudio.py
+# (тоже на голой стандартной библиотеке). Здесь - только его вызовы: адрес сервера
+# берём из конфига и обрабатываем ошибки.
 
-def _native_models_url(base_url):
-    """Из base_url вида http://host:1234/v1 делаем http://host:1234/api/v1/models -
-    нативный эндпоинт LM Studio, где виден статус загрузки каждой модели."""
-    root = base_url.rstrip("/")
-    if root.endswith("/v1"):
-        root = root[:-3]
-    return root + "/api/v1/models"
-
-
-def _server_models(scfg):
-    """Модели одного сервера: имя, загружена ли, умеет ли смотреть картинки.
-
-    Берём НАТИВНЫЙ эндпоинт LM Studio, а не OpenAI-совместимый /v1/models:
-    последний отдаёт голый список имён, из которого не видно ни того, загружена
-    ли модель, ни того, есть ли у неё зрение. А выбирать модель зрения из списка,
-    где половина моделей картинок не видит, - значит предлагать пользователю
-    заведомо нерабочий вариант.
-    """
-    url = _native_models_url(scfg["base_url"])
-    req = urllib.request.Request(url)
-    if scfg.get("api_key") and scfg["api_key"] != "not-needed":
-        req.add_header("Authorization", f"Bearer {scfg['api_key']}")
-    with urllib.request.urlopen(req, timeout=8) as r:
-        data = json.load(r)
-
-    out = []
-    for m in data.get("models", []):
-        if m.get("type") != "llm":
-            continue                     # эмбеддинги агентом быть не могут
-        key = m.get("key")
-        caps = m.get("capabilities") or {}
-        out.append({
-            "key": key,
-            "display_name": m.get("display_name") or key,
-            "params": m.get("params_string"),
-            "max_context": m.get("max_context_length"),
-            "loaded": bool(m.get("loaded_instances")),
-            "vision": bool(caps.get("vision")),
-            "tool_use": bool(caps.get("trained_for_tool_use")),
-        })
-    out.sort(key=lambda m: (not m["loaded"], m["key"].lower()))
-    return out
+def _ai_server_cfg():
+    """Сервер ИИ для списка/управления моделями - берём у agent_1 (его base_url
+    уже слит с config.local.yaml). Он и agent_2 указывают на один LM Studio."""
+    cfg = pipeline.load_config(_config_path())
+    return cfg["llm_servers"]["agent_1"]
 
 
 def _api_models_payload():
@@ -274,7 +250,7 @@ def _api_models_payload():
         },
     }
     try:
-        result["models"] = _server_models(servers["agent_1"])
+        result["models"] = lmstudio.list_models(servers["agent_1"])
     except Exception as e:  # noqa: BLE001
         # Сервер не отвечает - это НЕ повод спрятать настройку: уже выбранное
         # показать надо, а список просто останется пустым с честной причиной.
@@ -299,7 +275,7 @@ def _check_llm():
         try:
             # Разбор ответа сервера один на обе кнопки: и на проверку моделей,
             # и на выпадающие списки выбора. Две копии разъехались бы.
-            models = _server_models(scfg)
+            models = lmstudio.list_models(scfg)
             entry["reachable"] = True
             for m in models:
                 entry["models"].append({**m, "wanted": m["key"] in wanted})
@@ -421,6 +397,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(_api_models_payload())
             if path == "/api/check-llm":
                 return self._api_check_llm()
+            if path == "/api/lmstudio/models":
+                # Панель управления моделями - только администратору (обычному
+                # выбору хватает /api/models, где эмбеддинги уже отсеяны).
+                self._require_admin()
+                return self._api_lmstudio_models()
+            if path == "/api/admin/config":
+                self._require_admin()
+                return self._send_json(config_admin.admin_view(_config_path()))
             if path == "/api/users":
                 self._require_admin()
                 return self._send_json({"users": USERS.list_users()})
@@ -447,8 +431,10 @@ class Handler(BaseHTTPRequestHandler):
                     return self._api_file(session_id, query.get("path", [""])[0])
                 if action == "fragment":
                     return self._api_fragment(session_id, parse_qs(parsed.query))
+                if action == "lmstudio.log":
+                    return self._api_lmstudio_log(session_id)
             self.send_error(404)
-        except (SessionError, UserError, ChatError) as e:
+        except (SessionError, UserError, ChatError, LMStudioError, ConfigError) as e:
             self._send_json({"error": str(e)}, e.status)
         except Exception as e:  # noqa: BLE001
             self._send_json({"error": f"{type(e).__name__}: {e}"}, 500)
@@ -483,6 +469,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._api_chat_upload()
             if path == "/api/chat/send":
                 return self._api_chat_send()
+
+            # Управление сервером ИИ и глобальным конфигом - только администратору.
+            if path == "/api/lmstudio/load":
+                self._require_admin()
+                return self._api_lmstudio_load()
+            if path == "/api/lmstudio/unload":
+                self._require_admin()
+                return self._api_lmstudio_unload()
+            if path == "/api/admin/config":
+                self._require_admin()
+                view = config_admin.apply_admin_config(_config_path(), self._body_json())
+                return self._send_json({"ok": True, **view})
 
             # Управление пользователями - только администратору.
             if path == "/api/users":
@@ -531,7 +529,7 @@ class Handler(BaseHTTPRequestHandler):
                     QUEUE.cancel(session_id)
                     return self._send_json({"ok": True})
             self.send_error(404)
-        except (SessionError, UserError, ChatError) as e:
+        except (SessionError, UserError, ChatError, LMStudioError, ConfigError) as e:
             self._send_json({"error": str(e)}, e.status)
         except Exception as e:  # noqa: BLE001
             self._send_json({"error": f"{type(e).__name__}: {e}"}, 500)
@@ -577,6 +575,40 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(_check_llm())
         except Exception as e:  # noqa: BLE001
             self._send_json({"error": f"{type(e).__name__}: {e}"}, 500)
+
+    # ---- управление моделями LM Studio (админ) ----
+
+    def _api_lmstudio_models(self):
+        """Все модели сервера (включая эмбеддинги) со статусом - для админ-панели.
+        Сервер недоступен - НЕ ошибка эндпоинта: отдаём пустой список с причиной,
+        чтобы панель открылась и показала «сервер не отвечает», а не молчала."""
+        try:
+            models = lmstudio.list_models(_ai_server_cfg(), include_non_llm=True)
+            self._send_json({"models": models, "error": None})
+        except LMStudioError as e:
+            self._send_json({"models": [], "error": str(e)})
+
+    def _api_lmstudio_load(self):
+        body = self._body_json()
+        result = lmstudio.load_model(_ai_server_cfg(), body.get("model"),
+                                     body.get("params"))
+        self._send_json({"ok": True, "result": result})
+
+    def _api_lmstudio_unload(self):
+        result = lmstudio.unload_model(_ai_server_cfg(),
+                                       self._body_json().get("instance_id"))
+        self._send_json({"ok": True, "result": result})
+
+    def _api_lmstudio_log(self, session_id):
+        """Транскрипт обмена с LM Studio за последний прогон - открывается в
+        соседней вкладке. Нет файла (прогон без ИИ или ещё не запускался) - 404 с
+        человеческим текстом, а не пустая страница."""
+        path = STORE.paths_of(session_id)["output_dir"] / "lmstudio.log"
+        if not path.is_file():
+            raise SessionError(
+                "Лог LM Studio ещё не сформирован: запустите анализ с участием "
+                "нейросетей (полный или визуальный режим).", 404)
+        self._send_file(path, "text/plain; charset=utf-8", "inline")
 
     def _api_sessions_list(self):
         """Список сессий текущего пользователя (администратору - всех).
@@ -949,11 +981,22 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
 
+        # В историю сохраняем ТОЛЬКО видимый ответ (content), а не рассуждение:
+        # раздумья эфемерны, как в привычных чатах, и в контекст модели их не
+        # пересылаем (build_messages их не знает). Событие content уезжает к
+        # браузеру как "delta" - имя оставлено прежним, чтобы не плодить сущности.
         acc = []
         try:
-            for delta in chat_llm.stream_reply(server_cfg, model, messages):
-                acc.append(delta)
-                self._write_ndjson({"type": "delta", "text": delta})
+            for ev in chat_llm.stream_reply(server_cfg, model, messages):
+                kind = ev.get("type")
+                if kind == "content":
+                    acc.append(ev["text"])
+                    self._write_ndjson({"type": "delta", "text": ev["text"]})
+                elif kind == "reasoning":
+                    self._write_ndjson({"type": "reasoning", "text": ev["text"]})
+                elif kind == "stats":
+                    self._write_ndjson({"type": "stats", "tokens": ev.get("tokens"),
+                                        "seconds": ev.get("seconds"), "tps": ev.get("tps")})
             CHATS.append_message(owner, "assistant", "".join(acc))
             self._write_ndjson({"type": "done"})
         except Exception as e:  # noqa: BLE001

@@ -28,6 +28,7 @@ import time
 from interpreter import OpenInterpreter
 
 import llm_client
+import llm_transcript
 from llm_client import make_simple_ask_fn
 from schema import EXAMPLE_ERRORS, REPORT_SCHEMA
 from settings import PROJECT_ROOT
@@ -297,6 +298,12 @@ def run_analysis_agent(server_cfg: dict, input_dir: str, helper_dir: str,
     transcript = _run_investigation(interp, input_dir, max_code_turns, timeout_seconds)
     logger.info("Протокол работы агента: %d символов", len(transcript))
 
+    # Полную беседу агента с моделью - в транскрипт LM Studio (кнопка «Лог LM
+    # Studio» в сессии). Здесь она НЕ обрезается, как для контекста модели: это
+    # ровно то, ради чего лог и заводится - видеть, что модель на самом деле
+    # получала и отвечала.
+    _log_agent_conversation(server_cfg["model"], interp)
+
     if not transcript.strip():
         raise JSONValidationError(
             f"Агент ({server_cfg['model']}) не собрал никаких данных: протокол пуст. "
@@ -329,6 +336,29 @@ def run_analysis_agent(server_cfg: dict, input_dir: str, helper_dir: str,
         examples=examples_json,
     )
     return get_validated_json(
-        make_simple_ask_fn(server_cfg), prompt, REPORT_SCHEMA,
+        make_simple_ask_fn(server_cfg, label=f"агент {server_cfg['model']} — стадия отчёта"),
+        prompt, REPORT_SCHEMA,
         max_attempts=max_json_repair_attempts,
     )
+
+
+def _log_agent_conversation(model: str, interp: OpenInterpreter) -> None:
+    """Дамп полной беседы Open Interpreter в транскрипт LM Studio.
+
+    Стадия 1 (исследование) идёт через litellm внутри Open Interpreter, а не через
+    наш llm_client, поэтому её обмен ловим не на уровне запроса, а разом - из
+    накопленной истории interp.messages. Для стадии отчёта этого не нужно: она
+    идёт обычным chat-вызовом и логируется в llm_client сама.
+    """
+    if not llm_transcript.is_active():
+        return
+    lines = [f"\n{'=' * 80}",
+             f"АГЕНТ (Open Interpreter), модель {model}: полная беседа стадии исследования",
+             "=" * 80]
+    for m in interp.messages:
+        role, mtype = m.get("role"), m.get("type")
+        content = m.get("content")
+        if not isinstance(content, str):
+            content = str(content)
+        lines.append(f"\n--- {role}/{mtype} ---\n{content}")
+    llm_transcript.raw("\n".join(lines))

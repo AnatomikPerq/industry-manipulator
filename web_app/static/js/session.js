@@ -137,6 +137,19 @@ export function renderSessionStatus() {
     }
   }
   updateRunEnabled();
+  updateLogButton();
+}
+
+// Кнопка «Лог LM Studio» активна, только когда прогон с участием ИИ уже начался:
+// транскрипт пишется на стадиях зрения/агентов, а в режиме «только скрипты» его
+// нет вовсе (там сервер ИИ не трогается).
+export function updateLogButton() {
+  const btn = $("btn-llm-log");
+  if (!btn) return;
+  const m = S.meta;
+  const aiMode = m && ["full", "visual", "full_visual"].includes(m.mode);
+  const started = m && !["draft", "queued"].includes(m.status);
+  btn.disabled = !(aiMode && started);
 }
 
 // Лог тянем по смещению: сервер отдаёт только строки, которых у нас ещё нет.

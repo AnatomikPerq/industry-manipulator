@@ -73,7 +73,7 @@ PROMPT_TEMPLATE = """Ты объединяешь два отчёта о найд
 
 def merge_reports(server_cfg: dict, report_1: dict, report_2: dict,
                    known_errors: list, max_json_repair_attempts: int = 3) -> dict:
-    ask_fn = make_simple_ask_fn(server_cfg)
+    ask_fn = make_simple_ask_fn(server_cfg, label="мерджер (сшивание отчётов)")
 
     known_errors_block = json.dumps(known_errors, ensure_ascii=False, indent=2) \
         if known_errors else "(список пуст)"

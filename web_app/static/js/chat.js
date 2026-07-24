@@ -35,6 +35,7 @@ export async function openChat() {
   await Promise.all([loadChat(), loadModels()]);
   renderModelSelect();
   renderMessages();
+  setTps(null);
   const input = $("chat-input");
   if (input) input.focus();
 }
@@ -199,6 +200,36 @@ function scrollBottom() {
 }
 
 // ------------------------------------------------------------
+// Раздумья «думающей» модели и счётчик скорости
+// ------------------------------------------------------------
+// Сворачиваемый блок рассуждения над ответом. Появляется, только когда пришли
+// reasoning-события: у обычной (не думающей) модели его нет вовсе. Во время
+// генерации раскрыт, по завершении сворачивается - как в привычных чатах.
+function ensureThinkBody(bubble) {
+  let think = bubble.querySelector(".chat-think");
+  if (!think) {
+    think = document.createElement("details");
+    think.className = "chat-think";
+    think.open = true;
+    const summary = document.createElement("summary");
+    summary.textContent = "Рассуждение модели";
+    const body = document.createElement("div");
+    body.className = "chat-think-body";
+    think.append(summary, body);
+    bubble.insertBefore(think, bubble.firstChild);   // над текстом ответа
+  }
+  return think.querySelector(".chat-think-body");
+}
+
+function setTps(tps) {
+  const el = $("chat-tps");
+  if (!el) return;
+  if (tps == null) { el.textContent = ""; el.classList.add("hidden"); return; }
+  el.textContent = `${tps} ток/с`;
+  el.classList.remove("hidden");
+}
+
+// ------------------------------------------------------------
 // Приложенные файлы (до отправки)
 // ------------------------------------------------------------
 async function attachFiles(fileList) {
@@ -283,8 +314,10 @@ async function sendMessage() {
   scrollBottom();
 
   setSending(true);
+  setTps(null);
   abort = new AbortController();
   let acc = "";
+  let thinkBody = null;   // тело блока рассуждения — создаётся по первому reasoning
   try {
     const res = await fetch("/api/chat/send", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -314,6 +347,12 @@ async function sendMessage() {
           acc += ev.text;
           txt.textContent = acc;
           scrollBottom();
+        } else if (ev.type === "reasoning") {
+          if (!thinkBody) thinkBody = ensureThinkBody(bubble);
+          thinkBody.textContent += ev.text;
+          scrollBottom();
+        } else if (ev.type === "stats") {
+          setTps(ev.tps);
         } else if (ev.type === "error") {
           markError(txt, acc, ev.error);
           acc = txt.textContent;
@@ -336,6 +375,10 @@ async function sendMessage() {
     }
   } finally {
     txt.classList.remove("streaming");
+    // Рассуждение по завершении сворачиваем: интересен ответ, а протокол
+    // размышления пусть остаётся под спойлером, как в привычных чатах.
+    const think = bubble.querySelector(".chat-think");
+    if (think) think.open = false;
     abort = null;
     setSending(false);
     input.focus();

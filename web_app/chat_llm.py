@@ -19,6 +19,7 @@ config.local.yaml), поэтому картинка уходит data-URL'ом, 
 
 import base64
 import logging
+import time
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -197,14 +198,87 @@ def build_messages(chat: dict, resolve) -> list:
     return messages
 
 
+class ThinkSplitter:
+    """Разделяет поток на видимый ответ и рассуждение по инлайновым тегам
+    <think>…</think>.
+
+    ЗАЧЕМ. Часть «думающих» моделей шлёт рассуждение отдельным полем
+    delta.reasoning_content (его ловим прямо в stream_reply), но часть
+    ВСТАВЛЯЕТ его в content тегами <think>…</think>. Тег может прийти разрезанным
+    между двумя чанками («<th» + «ink>»), поэтому держим хвост, который ещё может
+    оказаться началом тега, и не отдаём его, пока не станет ясно.
+    """
+
+    OPEN = "<think>"
+    CLOSE = "</think>"
+
+    def __init__(self):
+        self.in_think = False
+        self.buf = ""
+
+    def feed(self, text: str):
+        """text -> список (kind, text), kind in {"content","reasoning"}."""
+        self.buf += text
+        out = []
+        while True:
+            tag = self.CLOSE if self.in_think else self.OPEN
+            idx = self.buf.find(tag)
+            if idx == -1:
+                keep = self._partial_tail(self.buf, tag)
+                emit = self.buf[:len(self.buf) - keep] if keep else self.buf
+                if emit:
+                    out.append(("reasoning" if self.in_think else "content", emit))
+                self.buf = self.buf[len(self.buf) - keep:] if keep else ""
+                break
+            before = self.buf[:idx]
+            if before:
+                out.append(("reasoning" if self.in_think else "content", before))
+            self.in_think = not self.in_think
+            self.buf = self.buf[idx + len(tag):]
+        return out
+
+    def flush(self):
+        """Остаток в конце потока: отдать как есть (недокрытый тег - просто текст)."""
+        if not self.buf:
+            return []
+        out = [("reasoning" if self.in_think else "content", self.buf)]
+        self.buf = ""
+        return out
+
+    @staticmethod
+    def _partial_tail(s: str, tag: str) -> int:
+        """Длина хвоста s, который может быть началом tag (иначе 0)."""
+        for k in range(min(len(tag) - 1, len(s)), 0, -1):
+            if s.endswith(tag[:k]):
+                return k
+        return 0
+
+
+# Как часто слать событие со скоростью генерации: чаще нет смысла - глаз столько
+# не читает, а браузер лишний раз перерисовывает счётчик.
+_STATS_INTERVAL = 0.4
+
+
 def stream_reply(server_cfg: dict, model: str, messages: list,
                  temperature: float = CHAT_TEMPERATURE,
                  max_tokens: int = CHAT_MAX_TOKENS):
-    """Генератор кусков ответа модели (потоковый chat.completions).
+    """Генератор СОБЫТИЙ ответа модели (потоковый chat.completions). Каждое
+    событие - словарь одного из видов:
 
-    Отдаём только delta.content. Если модель «думающая» и шлёт рассуждение
-    отдельным полем - его не показываем: в обычном чате нужен ответ, а не
-    протокол размышления."""
+      {"type": "content",   "text": ...}   - кусок видимого ответа;
+      {"type": "reasoning", "text": ...}   - кусок рассуждения «думающей» модели
+                                             (свёрнутый блок в интерфейсе);
+      {"type": "stats", "tokens": N, "seconds": T, "tps": X}  - скорость генерации.
+
+    Рассуждение показываем (в отличие от прежней версии, где его прятали): по
+    просьбе заказчика в чате должен быть виден процесс раздумий, как в привычных
+    чатах. Источник рассуждения - либо отдельное поле delta.reasoning_content
+    (LM Studio), либо инлайновые теги <think> в content (ThinkSplitter).
+
+    Токены считаем по чанкам: llama.cpp/LM Studio стримит по одному токену на
+    чанк. Финальную цифру уточняем по usage, если сервер его прислал
+    (stream_options.include_usage).
+    """
     from openai import OpenAI
 
     client = OpenAI(base_url=server_cfg["base_url"],
@@ -215,10 +289,52 @@ def stream_reply(server_cfg: dict, model: str, messages: list,
         temperature=temperature,
         max_tokens=max_tokens,
         stream=True,
+        stream_options={"include_usage": True},
     )
+
+    splitter = ThinkSplitter()
+    t_first = None
+    tokens = 0
+    last_stat = 0.0
+    usage_tokens = None
+
     for chunk in stream:
+        usage = getattr(chunk, "usage", None)
+        if usage is not None:
+            usage_tokens = getattr(usage, "completion_tokens", None) or usage_tokens
         if not chunk.choices:
             continue
-        piece = getattr(chunk.choices[0].delta, "content", None)
+        delta = chunk.choices[0].delta
+        # Рассуждение отдельным полем: имя у разных серверов разное.
+        reasoning = (getattr(delta, "reasoning_content", None)
+                     or getattr(delta, "reasoning", None))
+        piece = getattr(delta, "content", None)
+        if not reasoning and not piece:
+            continue
+
+        now = time.monotonic()
+        if t_first is None:
+            t_first = now
+        tokens += 1                          # один чанк ≈ один токен
+
+        if reasoning:
+            yield {"type": "reasoning", "text": reasoning}
         if piece:
-            yield piece
+            for kind, text in splitter.feed(piece):
+                yield {"type": kind, "text": text}
+
+        elapsed = now - t_first
+        if elapsed > 0 and now - last_stat >= _STATS_INTERVAL:
+            last_stat = now
+            yield {"type": "stats", "tokens": tokens, "seconds": round(elapsed, 2),
+                   "tps": round(tokens / elapsed, 1)}
+
+    for kind, text in splitter.flush():
+        yield {"type": kind, "text": text}
+
+    # Финальная сводка: цифру токенов берём у сервера, если он её прислал.
+    if t_first is not None:
+        elapsed = max(time.monotonic() - t_first, 1e-6)
+        final_tokens = usage_tokens or tokens
+        yield {"type": "stats", "tokens": final_tokens, "seconds": round(elapsed, 2),
+               "tps": round(final_tokens / elapsed, 1), "final": True}

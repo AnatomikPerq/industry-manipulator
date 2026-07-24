@@ -43,23 +43,28 @@ function optionLabel(m) {
   const bits = [];
   if (m.params) bits.push(m.params);
   if (m.vision) bits.push("зрение");
-  if (!m.loaded) bits.push("не загружена");
+  if (m.reasoning) bits.push("раздумья");
   return m.display_name + (bits.length ? ` — ${bits.join(", ")}` : "");
 }
 
 function fillSelect(select, chosen, def, onlyVision) {
-  const models = (catalog.models || []).filter((m) => !onlyVision || m.vision);
-  const defLabel = def ? `из config.yaml — ${def}` : "из config.yaml";
+  // ТОЛЬКО ЗАГРУЖЕННЫЕ в память модели: общаться и анализировать можно лишь тем,
+  // что реально поднято в LM Studio. Модель зрения вдобавок обязана уметь смотреть
+  // картинки.
+  const models = (catalog.models || []).filter(
+    (m) => m.loaded && (!onlyVision || m.vision));
+  const defShort = def ? def.split("/").pop() : null;
+  const defLabel = defShort ? `по умолчанию (${defShort})` : "по умолчанию";
   let html = `<option value="">${esc(defLabel)}</option>`;
   for (const m of models) {
     const sel = m.key === chosen ? " selected" : "";
     html += `<option value="${esc(m.key)}"${sel}>${esc(optionLabel(m))}</option>`;
   }
-  // Модель, выбранную раньше, но исчезнувшую с сервера, обязаны показать:
-  // молча подставить вместо неё «как в конфиге» значило бы соврать о том,
+  // Модель, выбранную раньше, но сейчас НЕ загруженную, обязаны показать честной
+  // пометкой: молча подставить вместо неё «по умолчанию» значило бы соврать о том,
   // чем пойдёт прогон.
   if (chosen && !models.some((m) => m.key === chosen)) {
-    html += `<option value="${esc(chosen)}" selected>${esc(chosen)} — нет на сервере</option>`;
+    html += `<option value="${esc(chosen)}" selected>${esc(chosen)} — не загружена</option>`;
   }
   select.innerHTML = html;
 }
